@@ -4,18 +4,17 @@
   "description": "AI-first frontend framework — compiles .screen files to vanilla JS + signals.",
   "type": "module",
   "bin": {
-    "muten": "bin/muten.js"
+    "muten": "./dist/bin/muten.js"
   },
-  "main": "index.js",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./index.js"
+    ".": "./dist/index.js"
+  },
+  "imports": {
+    "#engine/*": "./dist/engine/*"
   },
   "files": [
-    "bin",
-    "engine",
-    "build.js",
-    "lint.js",
-    "index.js",
+    "dist",
     "spec",
     "README.md"
   ],
@@ -32,9 +31,16 @@
   ],
   "license": "MIT",
   "scripts": {
-    "test": "node test/parse.mjs && node test/expr.mjs && node test/diagnostics.mjs && node test/parts.mjs && node test/smoke.mjs"
+    "build": "tsc && node --experimental-strip-types esbuild.ts",
+    "test": "npm run build && node --experimental-strip-types test/parse.ts && node --experimental-strip-types test/expr.ts && node --experimental-strip-types test/parts.ts && node --experimental-strip-types test/diagnostics.ts && node --experimental-strip-types test/routes.ts && node --experimental-strip-types test/runtime.ts && node --experimental-strip-types test/lang.ts && node --experimental-strip-types test/forms.ts && node --experimental-strip-types test/smoke.ts"
   },
   "optionalDependencies": {
     "sass": "^1.101.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
   }
 }
