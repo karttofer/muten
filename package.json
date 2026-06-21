@@ -1,10 +1,13 @@
 {
-  "name": "muten",
+  "name": "@muten/core",
   "version": "0.0.1",
   "description": "AI-first frontend framework — compiles .muten files to vanilla JS + signals.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/karttofer/muten.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "type": "module",
   "bin": {

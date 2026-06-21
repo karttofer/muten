@@ -49,14 +49,14 @@ DSL. `npm create muten` wires it up; `npm run dev` runs it.
 
 ```js
 // vite.config.mjs
-import muten from 'muten/vite-plugin-muten.js';
+import muten from '@muten/core/vite-plugin-muten.js';
 export default { plugins: [muten()] };  // theme.muten is auto-loaded
 ```
 
 ## Programmatic API
 
 ```js
-import { buildApp, compile, parse, validate, toDoc } from 'muten';
+import { buildApp, compile, parse, validate, toDoc } from '@muten/core';
 
 await buildApp('./my-app');               // same as `muten build ./my-app`
 const html = compile(toDoc(parse(src)));  // drive the compiler directly (embedding)
