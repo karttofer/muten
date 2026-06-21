@@ -1,4 +1,6 @@
-# muten
+<img width="157" height="157" alt="Group 21" src="https://github.com/user-attachments/assets/fe9a02e6-483d-4788-9286-142c1ddb7057" />
+
+## muten
 
 An **AI-first** frontend framework. You write `.muten` files; muten compiles them to vanilla JS
 with fine-grained signals — **no virtual DOM, no framework runtime to ship**. The language is small,
