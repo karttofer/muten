@@ -5,7 +5,10 @@ with fine-grained signals — **no virtual DOM, no framework runtime to ship**. 
 semantic and analyzable on purpose: an AI (or a person) can **locate and mutate** an app cheaply.
 
 ```sh
-npm create muten@latest my-app   # scaffold a new app (cross-platform: Windows + macOS)
+# muten lives in GitHub Packages — one-time, add to your ~/.npmrc (token scope: read:packages):
+#   @karttofer:registry=https://npm.pkg.github.com
+#   //npm.pkg.github.com/:_authToken=YOUR_GITHUB_PAT
+npx @karttofer/create-muten my-app   # scaffold a new app (cross-platform: Windows + macOS)
 cd my-app && npm install && npm run dev
 ```
 
@@ -39,24 +42,24 @@ muten lint  [dir]   # parse + validate every page, no compile
 ```
 
 `build`/`lint` default to the current directory; pass a path to target another. The `muten` bin ships
-with the app (it's a dependency). To scaffold a *new* app, use `npm create muten@latest` (the separate
-[`create-muten`](https://www.npmjs.com/package/create-muten) scaffolder).
+with the app (it's a dependency). To scaffold a *new* app, use the separate
+[`@karttofer/create-muten`](https://github.com/karttofer/create-muten) scaffolder (`npx @karttofer/create-muten`).
 
 ## Dev server (Vite)
 
 The Vite plugin gives a Muten app a dev server + HMR + client-side routing while authoring stays the
-DSL. `npm create muten` wires it up; `npm run dev` runs it.
+DSL. `npx @karttofer/create-muten` wires it up; `npm run dev` runs it.
 
 ```js
 // vite.config.mjs
-import muten from 'muten/vite-plugin-muten.js';
+import muten from '@karttofer/muten/vite-plugin-muten.js';
 export default { plugins: [muten()] };  // theme.muten is auto-loaded
 ```
 
 ## Programmatic API
 
 ```js
-import { buildApp, compile, parse, validate, toDoc } from 'muten';
+import { buildApp, compile, parse, validate, toDoc } from '@karttofer/muten';
 
 await buildApp('./my-app');               // same as `muten build ./my-app`
 const html = compile(toDoc(parse(src)));  // drive the compiler directly (embedding)
