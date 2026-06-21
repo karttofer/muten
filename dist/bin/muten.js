@@ -1,2 +1,0 @@
-#!/usr/bin/env node
-import{resolve as i}from"node:path";import{buildApp as s}from"../build.js";import{lintApp as t}from"../lint.js";const[e,c]=process.argv.slice(2),o=i(c||process.cwd());try{e==="build"?await s(o):e==="lint"?process.exit(await t(o)?1:0):(console.error("usage: muten <build|lint> [app-dir]   (default: current directory)"),process.exit(1))}catch(r){console.error("\u2716 "+(r instanceof Error?r.message:String(r))),process.exit(1)}
