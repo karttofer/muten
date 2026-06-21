@@ -44,8 +44,8 @@ const FAMILIES: { [family: string]: FamilyFn } = {
   align:   (m)    => ['left', 'center', 'right', 'justify'].includes(m) ? `text-align:${m}` : null,
   justify: (m)    => { const v = JUSTIFY.get(m); return v ? `justify-content:${v}` : null; },
   items:   (m)    => { const v = ITEMS.get(m); return v ? `align-items:${v}` : null; },
-  width:   (m, t) => m === 'full' ? 'width:100%' : (len(m, t.space) ? `width:${len(m, t.space)}` : null),
-  height:  (m, t) => m === 'full' ? 'height:100%' : (len(m, t.space) ? `height:${len(m, t.space)}` : null),
+  width:   (m) => m === 'full' ? 'width:100%' : (/^\d+$/.test(m) ? `width:${m}px` : null),   // full | literal px — NOT the spacing scale
+  height:  (m) => m === 'full' ? 'height:100%' : (/^\d+$/.test(m) ? `height:${m}px` : null),
 };
 
 // THE ACCEPTED VOCABULARY (source of truth for strict validation + autocomplete)

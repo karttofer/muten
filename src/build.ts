@@ -71,12 +71,15 @@ export async function buildApp(appRoot: string, outDir = join(appRoot, 'dist')):
     };
   }
 
-  // a minimal route index (links) + the generated app graph
+  // the app graph + a route index — but only when no root route ("/") already wrote dist/index.html,
+  // so a `/ -> home` build keeps the home page there instead of clobbering it with the listing.
   mkdirSync(outDir, { recursive: true });
-  const links = built.map((route) => `<li><a href="./${route}/">/${route}</a></li>`).join('\n      ');
-  writeFileSync(join(outDir, 'index.html'), `<!doctype html><meta charset="utf-8"><title>app</title>\n<h1>Routes</h1>\n<ul>\n      ${links}\n</ul>\n`);
+  if (!built.includes('')) {
+    const links = built.map((route) => `<li><a href="./${route}/">/${route}</a></li>`).join('\n      ');
+    writeFileSync(join(outDir, 'index.html'), `<!doctype html><meta charset="utf-8"><title>app</title>\n<h1>Routes</h1>\n<ul>\n      ${links}\n</ul>\n`);
+    console.log(`\n✓ ${rel(join(outDir, 'index.html'))} → route index`);
+  }
   writeFileSync(join(outDir, 'app.map.json'), JSON.stringify(appMap, null, 2));
-  console.log(`\n✓ ${rel(join(outDir, 'index.html'))} → route index`);
   console.log(`✓ ${rel(join(outDir, 'app.map.json'))} → app graph (the root the AI reads)`);
 
   return { routes: built, outDir };
