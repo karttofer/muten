@@ -9,12 +9,20 @@
 //
 // Deferred on purpose: real async query (loading/error/stale), and do{}/onError rollback.
 
-import { PALETTE, BASE, TOKENS, tokenClass } from './theme.js';
+import { tokenClass, resolveToken, defaultTheme } from './tokens.js';
 
 const stripAt = (s) => (typeof s === 'string' && s.startsWith('@')) ? s.slice(1) : s;
 
 // a Custom input value: @state -> snapshot of the signal; otherwise the literal
 const customValue = (v) => (typeof v === 'string' && v.startsWith('@')) ? `${v.slice(1)}.get()` : JSON.stringify(v);
+
+// Semantic containers: primitive -> [HTML tag, base class]. One generic codegen path
+// (instead of a case per region) → the AI reads intent (landmarks) and we stay DRY.
+const CONTAINERS = {
+  Shell: ['div', 'shell'], Header: ['header', 'header'], Nav: ['nav', 'nav'],
+  Sidebar: ['aside', 'sidebar'], Footer: ['footer', 'footer'],
+  Page: ['main', 'page'], Stack: ['div', 'stack'], // Page IS the main content landmark
+};
 
 // Parses a where() clause and classifies it as static (literal) or dynamic (@state).
 function parseClause(clause) {
@@ -61,11 +69,25 @@ const RUNTIME = `// ── fine-grained signals runtime (~18 lines, no dependenc
   function effect(fn) {
     const run = () => { const prev = __current; __current = run; try { fn(); } finally { __current = prev; } };
     run();
-  }`;
+  }
+  function __has(a, b) { return Array.isArray(a) ? a.includes(b) : String(a ?? '').toLowerCase().includes(String(b ?? '').toLowerCase()); }`;
 
-export function compile(doc, data = {}, projectCss = '', components = {}, sources = {}) {
+// Emit a .muten page as an ESM MODULE (for the Vite pipeline): exports mount(root) + css.
+// opts.store = { state:[...], actions:[...] } lets the page reference the app-global store.
+export function compileModule(doc, data = {}, projectCss = '', components = {}, sources = {}, opts = {}) {
+  return compile(doc, data, projectCss, components, sources, { ...opts, format: 'module' });
+}
+
+// Emit one .store DOMAIN slice (state + get + actions + effects) as a shared ESM module.
+export function compileStore({ state = {}, gets = {}, actions = {}, effects = [], entities = {} } = {}, data = {}, sources = {}) {
+  return compile({ screen: 'store', entities, state, actions, gets, effects, rootId: undefined, nodes: {} }, data, '', {}, sources, { format: 'store' });
+}
+
+export function compile(doc, data = {}, projectCss = '', components = {}, sources = {}, opts = {}) {
   const { nodes, rootId, state, entities, actions, screen } = doc;
+  const theme = opts.theme || defaultTheme; // scale + base, supplied by the project (defaults otherwise)
   let lines = [];
+  let hasSlot = false; // a shell with a `slot` returns the outlet from mount() so the router uses it
   // capture the lines a callback emits (for deferred children: when/each mount functions)
   const capture = (fn) => { const saved = lines; lines = []; fn(); const out = lines; lines = saved; return out; };
 
@@ -73,32 +95,60 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
   const usedTokens = new Set();
   const classFor = (base, props) => {
     for (const t of (props.style || [])) usedTokens.add(t);
-    return [base, ...(props.style || []).map(tokenClass)].join(' ');
+    // style() = analyzable Muten tokens; class() = raw look (your CSS / Tailwind / any), passthrough
+    return [base, ...(props.style || []).map(tokenClass), ...(props.class || [])].join(' ');
   };
 
   const genChildren = (id, parentVar) => {
     for (const childId of nodes[id].children) genNode(childId, parentVar);
   };
 
+  // text-bearing primitives (Text/Span/Title): plain | reactive interpolation | reactive expr
+  function genTextEl(id, tag, className, value, parentVar) {
+    lines.push(`const el_${id} = document.createElement('${tag}');`);
+    lines.push(`el_${id}.className = ${JSON.stringify(className)};`);
+    if (typeof value === 'string') {
+      lines.push(`el_${id}.textContent = ${JSON.stringify(value)};`);
+    } else if (value && value.kind === 'interp') {
+      const concat = value.parts.map((part) => typeof part === 'string' ? JSON.stringify(part) : `String(${compileExpr(part, pageScope)} ?? '')`).join(' + ');
+      const reactive = value.parts.some((part) => typeof part !== 'string');
+      lines.push(reactive ? `effect(() => { el_${id}.textContent = ${concat}; });` : `el_${id}.textContent = ${concat};`);
+    } else if (value && value.kind) {
+      lines.push(`effect(() => { el_${id}.textContent = String(${compileExpr(value, pageScope)} ?? ''); });`);
+    }
+    lines.push(`${parentVar}.appendChild(el_${id});`);
+  }
+
+  // set an attribute from a string | reactive interpolation | reactive expr (Image src/alt)
+  function genInterpAttr(id, attr, value) {
+    if (typeof value === 'string') {
+      lines.push(`el_${id}.${attr} = ${JSON.stringify(value)};`);
+    } else if (value && value.kind === 'interp') {
+      const concat = value.parts.map((part) => typeof part === 'string' ? JSON.stringify(part) : `String(${compileExpr(part, pageScope)} ?? '')`).join(' + ');
+      const reactive = value.parts.some((part) => typeof part !== 'string');
+      lines.push(reactive ? `effect(() => { el_${id}.${attr} = ${concat}; });` : `el_${id}.${attr} = ${concat};`);
+    } else if (value && value.kind) {
+      lines.push(`effect(() => { el_${id}.${attr} = String(${compileExpr(value, pageScope)} ?? ''); });`);
+    }
+  }
+
   function genNode(id, parentVar) {
     const n = nodes[id];
     const p = n.props || {};
+    const cont = CONTAINERS[n.type]; // semantic regions + Stack: one generic path
+    if (cont) {
+      const [tag, base] = cont;
+      lines.push(`const el_${id} = document.createElement('${tag}');`);
+      lines.push(`el_${id}.className = ${JSON.stringify(classFor(base, p))};`);
+      if (n.type === 'Nav' && typeof p.label === 'string') lines.push(`el_${id}.setAttribute('aria-label', ${JSON.stringify(p.label)});`);
+      lines.push(`${parentVar}.appendChild(el_${id});`);
+      genChildren(id, `el_${id}`);
+      return;
+    }
     switch (n.type) {
-      case 'Page': {
-        lines.push(`const el_${id} = document.createElement('div');`);
-        lines.push(`el_${id}.className = ${JSON.stringify(classFor('page', p))};`);
-        if (p.title) {
-          lines.push(`const ttl_${id} = document.createElement('h1');`);
-          lines.push(`ttl_${id}.textContent = ${JSON.stringify(p.title)};`);
-          lines.push(`el_${id}.appendChild(ttl_${id});`);
-        }
-        lines.push(`${parentVar}.appendChild(el_${id});`);
-        genChildren(id, `el_${id}`);
-        break;
-      }
 
       case 'SearchField': {
-        const sig = stripAt(p.bind);
+        const sig = bindSig(p.bind);
         lines.push(`const el_${id} = document.createElement('input');`);
         lines.push(`el_${id}.type = 'search';`);
         lines.push(`el_${id}.className = ${JSON.stringify(classFor('search', p))};`);
@@ -110,7 +160,7 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
       }
 
       case 'DataTable': {
-        const dataSig = stripAt(p.data);
+        const dataSig = bindSig(p.data);
         const dataExpr = queryStates.has(dataSig) ? `${dataSig}.get().data` : `${dataSig}.get()`;
         const columns = p.columns || [];
         const clauses = (p.where || []).map(parseClause);
@@ -136,10 +186,8 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
         }
         for (const ra of rowActions) {
           const rp = ra.props || {};
-          const arg = typeof rp.arg === 'string' && rp.arg.startsWith('row.')
-            ? `row[${JSON.stringify(rp.arg.slice(4))}]`
-            : JSON.stringify(rp.arg);
-          lines.push(`  { const td = document.createElement('td'); const b = document.createElement('button'); b.className = ${JSON.stringify(classFor('row-action', rp))}; b.textContent = ${JSON.stringify(rp.label)}; b.addEventListener('click', () => ${rp.action}(${arg})); td.appendChild(b); tr.appendChild(td); }`);
+          const arg = rp.arg !== undefined ? compileExpr(rp.arg, { locals: new Set(['row']) }) : '';
+          lines.push(`  { const td = document.createElement('td'); const b = document.createElement('button'); b.className = ${JSON.stringify(classFor('row-action', rp))}; b.textContent = ${JSON.stringify(rp.label)}; b.addEventListener('click', () => ${actionRef(rp.action)}(${arg})); td.appendChild(b); tr.appendChild(td); }`);
         }
         lines.push(`  return tr;`);
         lines.push(`}`);
@@ -155,7 +203,7 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
       }
 
       case 'Form': {
-        const sig = stripAt(p.bind);
+        const sig = bindSig(p.bind);
         const entityName = state[sig].type;
         const fields = editableFields(entities[entityName]);
 
@@ -185,7 +233,7 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
         }
 
         lines.push(`{ const sb = document.createElement('button'); sb.type = 'submit'; sb.className = 'submit'; sb.textContent = ${JSON.stringify(p.submitLabel || 'Submit')}; el_${id}.appendChild(sb); }`);
-        lines.push(`el_${id}.addEventListener('submit', (e) => { e.preventDefault(); ${p.submit}(); });`);
+        lines.push(`el_${id}.addEventListener('submit', (e) => { e.preventDefault(); ${actionRef(p.submit)}(); });`);
 
         // effect: reflects ${sig} into the fields -> draft.reset() clears the form for free.
         // The guard avoids moving the cursor of the field being typed.
@@ -200,46 +248,21 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
         break;
       }
 
-      case 'Stack': {
-        lines.push(`const el_${id} = document.createElement('div');`);
-        lines.push(`el_${id}.className = ${JSON.stringify(classFor('stack', p))};`);
-        lines.push(`${parentVar}.appendChild(el_${id});`);
-        genChildren(id, `el_${id}`);
+      case 'Text':
+        genTextEl(id, 'p', classFor('text', p), p.value, parentVar);
         break;
-      }
-
-      case 'Text': {
-        lines.push(`const el_${id} = document.createElement('p');`);
-        lines.push(`el_${id}.className = ${JSON.stringify(classFor('text', p))};`);
-        const v = p.value;
-        if (typeof v === 'string') {
-          lines.push(`el_${id}.textContent = ${JSON.stringify(v)};`);
-        } else if (v && v.kind === 'interp') {
-          // "Hi, {user.name}" → concat of literals + reactive refs; wrap in effect if any ref
-          const concat = v.parts.map((part) =>
-            typeof part === 'string' ? JSON.stringify(part) : `String(${compileExpr(part, pageScope)} ?? '')`).join(' + ');
-          const reactive = v.parts.some((part) => typeof part !== 'string');
-          lines.push(reactive ? `effect(() => { el_${id}.textContent = ${concat}; });` : `el_${id}.textContent = ${concat};`);
-        } else if (v && v.kind) {
-          lines.push(`effect(() => { el_${id}.textContent = String(${compileExpr(v, pageScope)} ?? ''); });`);
-        }
-        lines.push(`${parentVar}.appendChild(el_${id});`);
+      case 'Span':
+        genTextEl(id, 'span', classFor('span', p), p.value, parentVar);
         break;
-      }
+      case 'Title':
+        genTextEl(id, p.level || 'h1', classFor('title', p), p.value, parentVar); // level via keyword; <h1> default
+        break;
 
       case 'Image': {
         lines.push(`const el_${id} = document.createElement('img');`);
         lines.push(`el_${id}.className = ${JSON.stringify(classFor('image', p))};`);
-        const v = p.src;
-        if (typeof v === 'string') {
-          lines.push(`el_${id}.src = ${JSON.stringify(v)};`);
-        } else if (v && v.kind === 'interp') {
-          const concat = v.parts.map((part) => typeof part === 'string' ? JSON.stringify(part) : `String(${compileExpr(part, pageScope)} ?? '')`).join(' + ');
-          const reactive = v.parts.some((part) => typeof part !== 'string');
-          lines.push(reactive ? `effect(() => { el_${id}.src = ${concat}; });` : `el_${id}.src = ${concat};`);
-        } else if (v && v.kind) {
-          lines.push(`effect(() => { el_${id}.src = String(${compileExpr(v, pageScope)} ?? ''); });`);
-        }
+        genInterpAttr(id, 'src', p.src);
+        genInterpAttr(id, 'alt', p.alt ?? ''); // required by the manifest; '' = decorative
         lines.push(`${parentVar}.appendChild(el_${id});`);
         break;
       }
@@ -288,7 +311,7 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
         lines.push(`el_${id}.className = ${JSON.stringify(classFor('custom', p))};`);
         lines.push(`${parentVar}.appendChild(el_${id});`);
         const ins = Object.entries(p.inputs || {}).map(([k, v]) => `${JSON.stringify(k)}: ${customValue(v)}`).join(', ');
-        const ons = Object.entries(p.on || {}).map(([ev, act]) => `${JSON.stringify(ev)}: (...__a) => ${act}(...__a)`).join(', ');
+        const ons = Object.entries(p.on || {}).map(([ev, act]) => `${JSON.stringify(ev)}: (...__a) => ${actionRef(act)}(...__a)`).join(', ');
         lines.push(`if (typeof __custom_${p.component} === 'function') __custom_${p.component}(el_${id}, { ${ins} }, { ${ons} });`);
         break;
       }
@@ -296,12 +319,31 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
       case 'Button': {
         lines.push(`const el_${id} = document.createElement('button');`);
         lines.push(`el_${id}.className = ${JSON.stringify(classFor('button', p))};`);
-        if (typeof p.label === 'string') lines.push(`el_${id}.textContent = ${JSON.stringify(p.label)};`);
+        if (n.children && n.children.length) genChildren(id, `el_${id}`);          // clickable card: arbitrary content
+        else if (p.label !== undefined) genInterpAttr(id, 'textContent', p.label); // static OR interpolated label
         if (p.action) {
-          const arg = p.arg !== undefined ? argExpr(p.arg) : '';
-          lines.push(`el_${id}.addEventListener('click', () => ${p.action}(${arg}));`);
+          const arg = p.arg !== undefined ? compileExpr(p.arg, pageScope) : '';
+          lines.push(`el_${id}.addEventListener('click', () => ${actionRef(p.action)}(${arg}));`);
         }
         lines.push(`${parentVar}.appendChild(el_${id});`);
+        break;
+      }
+
+      case 'Link': { // client-side nav → <a href="#/route">
+        lines.push(`const el_${id} = document.createElement('a');`);
+        lines.push(`el_${id}.className = ${JSON.stringify(classFor('link', p))};`);
+        lines.push(`el_${id}.href = ${JSON.stringify('#' + (p.to || '/'))};`);
+        if (n.children && n.children.length) genChildren(id, `el_${id}`);          // clickable card that navigates
+        else if (p.label !== undefined) genInterpAttr(id, 'textContent', p.label);
+        lines.push(`${parentVar}.appendChild(el_${id});`);
+        break;
+      }
+
+      case 'slot': { // the outlet where the router mounts the active page
+        hasSlot = true;
+        lines.push(`const __outlet = document.createElement('div');`);
+        lines.push(`__outlet.className = 'muten-outlet';`);
+        lines.push(`${parentVar}.appendChild(__outlet);`);
         break;
       }
 
@@ -311,13 +353,14 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
   }
 
   function genState() {
+    const exp = opts.format === 'store' ? 'export ' : ''; // store state is exported (shared module)
     const out = [];
     for (const [name, def] of Object.entries(state)) {
       if (typeof def.source === 'string' && def.source.startsWith('query:')) {
         const q = def.source.slice('query:'.length);
-        out.push(`const ${name} = query(${JSON.stringify(q)}); // async: ${name}.loading / .error / .data`);
+        out.push(`${exp}const ${name} = query(${JSON.stringify(q)}); // async: ${name}.loading / .error / .data`);
       } else {
-        out.push(`const ${name} = signal(${JSON.stringify(def.initial ?? null)});`);
+        out.push(`${exp}const ${name} = signal(${JSON.stringify(def.initial ?? null)});`);
       }
     }
     return out.join('\n  ');
@@ -325,6 +368,25 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
 
   // ── compiling the action BODIES (the logic comes from the .screen, not heuristics) ──
   const stateKeys = new Set(Object.keys(state));
+  // app-GLOBAL stores by DOMAIN (resolved from virtual:muten/store/<domain>; no imports in source).
+  // cart.total / cart.items → __store_cart.total.get();  -> cart.add(id) → __store_cart.add(id)
+  const stores = opts.stores || {};
+  const usedStores = new Set();
+  const consts = doc.consts || {}; // compile-time immutable values (inlined, never reactive)
+  const inStore = (d, m, kind) => stores[d] && (stores[d][kind] || []).includes(m);
+  const actionRef = (name) => {
+    const [d, m] = name.split('.');
+    if (m && inStore(d, m, 'actions')) { usedStores.add(d); return `__store_${d}.${m}`; }
+    return name;
+  };
+  // bind/data target → the signal: @local → name; store field cart.query → __store_cart.query
+  const bindSig = (ref) => {
+    if (typeof ref !== 'string') return ref;
+    if (ref.startsWith('@')) return ref.slice(1);
+    const [d, f] = ref.split('.');
+    if (f && stores[d]) { usedStores.add(d); return `__store_${d}.${f}`; }
+    return ref;
+  };
   const pageScope = { locals: new Set() }; // page-level expressions (text interpolation, when)
   // query-backed states are RICH async signals: { data, loading, error }
   const queryStates = new Set(
@@ -347,12 +409,23 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
       return `${head}.get().data${tail}`;                     // @users -> data array; @users.length -> data.length
     }
     if (stateKeys.has(head)) return `${head}.get()` + tail;   // draft -> draft.get()
+    if (stores[head]) {                                       // app-global store: cart.total / cart.items
+      const member = rest[0];
+      const more = rest.length > 1 ? '.' + rest.slice(1).join('.') : '';
+      if (inStore(head, member, 'state') || inStore(head, member, 'gets')) { usedStores.add(head); return `__store_${head}.${member}.get()${more}`; }
+    }
+    if (consts[head] !== undefined) {                          // compile-time const → inline value
+      let v = consts[head];
+      for (const k of rest) v = (v && typeof v === 'object') ? v[k] : undefined;
+      return JSON.stringify(v ?? null);
+    }
     return head + tail;                                        // input parameter (id)
   }
 
   function compileExpr(node, scope) {
     if (node.kind === 'lit') return JSON.stringify(node.value);
     if (node.kind === 'ref') return resolveRef(node.name, scope);
+    if (node.kind === 'tern') return `(${compileExpr(node.cond, scope)} ? ${compileExpr(node.then, scope)} : ${compileExpr(node.else, scope)})`;
     if (node.kind === 'un') {
       const o = compileExpr(node.operand, scope);
       if (node.op === 'not') return `!(${o})`;
@@ -361,66 +434,119 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
     if (node.kind === 'bin') {
       const L = compileExpr(node.left, scope);
       const R = compileExpr(node.right, scope);
-      if (node.op === 'contains') return `String(${L} ?? '').toLowerCase().includes(String(${R}).toLowerCase())`;
-      const JS = { '==': '===', '!=': '!==', '<': '<', '>': '>', '<=': '<=', '>=': '>=', and: '&&', or: '||' };
+      if (node.op === 'contains') return `__has(${L}, ${R})`; // list membership OR substring
+      const JS = { '==': '===', '!=': '!==', '<': '<', '>': '>', '<=': '<=', '>=': '>=', and: '&&', or: '||', '+': '+', '-': '-', '*': '*', '/': '/' };
       if (JS[node.op]) return `(${L} ${JS[node.op]} ${R})`;
       throw new Error('unsupported operator: ' + node.op);
     }
     throw new Error('unsupported expression');
   }
 
-  // arrow-call arg: "t.id" -> item/row scope var; state -> .get(); else a bare name
-  function argExpr(argStr) {
-    if (typeof argStr !== 'string') return JSON.stringify(argStr);
-    const [head, ...rest] = argStr.split('.');
-    const tail = rest.length ? '.' + rest.join('.') : '';
-    if (stateKeys.has(head)) return `${head}.get()${tail}`;
-    return head + tail;
+
+  // one mutation statement (shared by actions + effects) → JS line(s). scope = { locals, input }
+  function stmtLines(st, scope) {
+    const out = [];
+    if (st.op === 'if') { // branching inside an action body
+      out.push(`if (${compileExpr(st.cond, scope)}) {`);
+      for (const s of (st.then || [])) for (const l of stmtLines(s, scope)) out.push('  ' + l);
+      if (st.else) {
+        out.push('} else {');
+        for (const s of st.else) for (const l of stmtLines(s, scope)) out.push('  ' + l);
+      }
+      out.push('}');
+      return out;
+    }
+    if (st.op === 'reset') {
+      out.push(`${st.target}.set(${JSON.stringify(state[st.target].initial ?? null)});`);
+    } else if (st.op === 'set') {
+      out.push(`${st.target}.set(${compileExpr(st.arg, scope)});`);
+    } else if (st.op === 'push') {
+      const elem = (state[st.target].type.match(/^list<(.+)>$/) || [])[1];
+      const isEntity = elem && entities[elem]; // list<User> → entity; list<uuid>/list → scalar
+      const wrap = (v) => queryStates.has(st.target) // query target: mutate .data inside { data, loading, error }
+        ? `${st.target}.set({ ...${st.target}.get(), data: [...${st.target}.get().data, ${v}] });`
+        : `${st.target}.set([...${st.target}.get(), ${v}]);`;
+      if (isEntity) { // entity list: copy + auto-fill uuid fields
+        out.push(`{ const __it = { ...${compileExpr(st.arg, scope)} };`);
+        for (const f of uuidFields(elem)) out.push(`  if (__it.${f} === null || __it.${f} === undefined) __it.${f} = __id(); // auto uuid`);
+        out.push(`  ${wrap('__it')} }`);
+      } else { // scalar list (ids, numbers…): push the value as-is
+        out.push(`${wrap(compileExpr(st.arg, scope))}`);
+      }
+    } else if (st.op === 'remove') {
+      const inner = { ...scope, locals: new Set([...(scope.locals || []), st.param]) };
+      const pred = compileExpr(st.pred, inner);
+      out.push(queryStates.has(st.target)
+        ? `${st.target}.set({ ...${st.target}.get(), data: ${st.target}.get().data.filter((${st.param}) => !(${pred})) });`
+        : `${st.target}.set(${st.target}.get().filter((${st.param}) => !(${pred})));`);
+    } else {
+      throw new Error('unsupported action op: ' + st.op);
+    }
+    return out;
   }
 
   function genActions() {
+    const exp = opts.format === 'store' ? 'export ' : ''; // store actions are exported (shared module)
     const out = [];
     for (const [name, a] of Object.entries(actions || {})) {
       const inputIsState = stateKeys.has(a.input);
       const scope = { locals: new Set(), input: a.input, inputIsState };
-      // if the input is a state it's read from the signal; otherwise it's a parameter (e.g. id)
-      out.push(`function ${name}(${inputIsState ? '' : a.input}) {`);
-      for (const st of a.body || []) {
-        if (st.op === 'reset') {
-          out.push(`  ${st.target}.set(${JSON.stringify(state[st.target].initial ?? null)});`);
-        } else if (st.op === 'set') {
-          out.push(`  ${st.target}.set(${compileExpr(st.arg, scope)});`);
-        } else if (st.op === 'push') {
-          const elem = (state[st.target].type.match(/^list<(.+)>$/) || [])[1];
-          const isEntity = elem && entities[elem]; // list<User> → entity; list<uuid>/list → scalar
-          const wrap = (v) => queryStates.has(st.target) // query target: mutate .data inside { data, loading, error }
-            ? `${st.target}.set({ ...${st.target}.get(), data: [...${st.target}.get().data, ${v}] });`
-            : `${st.target}.set([...${st.target}.get(), ${v}]);`;
-          if (isEntity) { // entity list: copy + auto-fill uuid fields
-            out.push(`  { const __it = { ...${compileExpr(st.arg, scope)} };`);
-            for (const f of uuidFields(elem)) out.push(`    if (__it.${f} === null || __it.${f} === undefined) __it.${f} = __id(); // auto uuid`);
-            out.push(`    ${wrap('__it')} }`);
-          } else { // scalar list (ids, numbers…): push the value as-is
-            out.push(`  ${wrap(compileExpr(st.arg, scope))}`);
-          }
-        } else if (st.op === 'remove') {
-          const inner = { ...scope, locals: new Set([...scope.locals, st.param]) };
-          const pred = compileExpr(st.pred, inner);
-          out.push(queryStates.has(st.target)
-            ? `  ${st.target}.set({ ...${st.target}.get(), data: ${st.target}.get().data.filter((${st.param}) => !(${pred})) });`
-            : `  ${st.target}.set(${st.target}.get().filter((${st.param}) => !(${pred})));`);
-        } else {
-          throw new Error('unsupported action op: ' + st.op);
-        }
-      }
+      out.push(`${exp}function ${name}(${inputIsState ? '' : a.input}) {`);
+      for (const st of a.body || []) for (const l of stmtLines(st, scope)) out.push('  ' + l);
       out.push(`}`);
     }
     return out.join('\n  ');
   }
 
+  // .store reactive side-effects: effect(() => { <stmts> }) — re-runs when the state it reads changes
+  function genEffects() {
+    const scope = { locals: new Set() };
+    return (doc.effects || []).map((body) =>
+      `effect(() => {\n${body.map((st) => stmtLines(st, scope).map((l) => '    ' + l).join('\n')).join('\n')}\n  });`).join('\n  ');
+  }
+
+  // ── STATIC (Astro-like): a page with NO reactivity compiles to plain HTML, zero runtime ──
+  const escHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escAttr = (s) => escHtml(s).replace(/"/g, '&quot;');
+  const strOf = (v) => (typeof v === 'string' ? v : ''); // static pages carry only plain strings
+  function isStatic() {
+    if (opts.format !== 'module' || opts.base) return false; // never the shell, store, or html format
+    const reactiveType = new Set(['When', 'Each', 'Custom', 'Form', 'SearchField', 'DataTable', 'slot']);
+    const reactiveProp = ['action', 'bind', 'submit', 'on', 'inputs', 'data'];
+    for (const id of Object.keys(nodes)) {
+      const n = nodes[id]; const p = n.props || {};
+      if (reactiveType.has(n.type)) return false;
+      if (reactiveProp.some((k) => p[k] !== undefined)) return false;
+      if (['value', 'src', 'alt', 'label'].some((k) => p[k] && p[k].kind === 'interp')) return false; // reactive interpolation
+    }
+    return true;
+  }
+  function renderStatic(id) {
+    const n = nodes[id]; const p = n.props || {};
+    const kids = () => (nodes[id].children || []).map(renderStatic).join('');
+    const cls = (base) => ` class="${escAttr(classFor(base, p))}"`;
+    const cont = CONTAINERS[n.type];
+    if (cont) { const [tag, base] = cont; return `<${tag}${cls(base)}>${kids()}</${tag}>`; }
+    switch (n.type) {
+      case 'Text': return `<p${cls('text')}>${escHtml(strOf(p.value))}</p>`;
+      case 'Span': return `<span${cls('span')}>${escHtml(strOf(p.value))}</span>`;
+      case 'Title': { const lvl = p.level || 'h1'; return `<${lvl}${cls('title')}>${escHtml(strOf(p.value))}</${lvl}>`; }
+      case 'Image': return `<img${cls('image')} src="${escAttr(strOf(p.src))}" alt="${escAttr(strOf(p.alt))}">`;
+      case 'Link': return `<a${cls('link')} href="${escAttr('#' + (p.to || '/'))}">${(n.children && n.children.length) ? kids() : escHtml(strOf(p.label))}</a>`;
+      case 'Button': return `<button${cls('button')}>${(n.children && n.children.length) ? kids() : escHtml(strOf(p.label))}</button>`;
+      default: return '';
+    }
+  }
+  const staticPage = isStatic();
+
   const stateDecls = genState();
   const actionDecls = genActions();
-  genNode(rootId, 'app');
+  // `get`s of a .store slice → exported memoized computeds; `effect`s → reactive side-effects
+  const getDecls = Object.entries(doc.gets || {}).map(([name, expr]) => `export const ${name} = computed(() => ${compileExpr(expr, pageScope)});`).join('\n');
+  const effectDecls = genEffects();
+  let staticHtml = null;
+  if (staticPage) staticHtml = renderStatic(rootId); // populates usedTokens via classFor (so tokenCss is emitted)
+  else if (opts.format !== 'store') genNode(rootId, 'app'); // the store has no DOM, just state + actions
   const renderBody = lines.join('\n  ');
 
   // which uuid fields to auto-fill per query (so the mock doesn't need to carry ids)
@@ -434,11 +560,88 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
   }
 
   // static CSS: only the tokens actually used (atomic, cacheable classes)
-  const tokenCss = [...usedTokens].filter((t) => TOKENS[t]).map((t) => `.${tokenClass(t)}{${TOKENS[t]}}`).join('\n');
+  const tokenCss = [...usedTokens].map((t) => {
+    const c = resolveToken(t, theme); if (!c) return '';
+    const rule = `.${tokenClass(t)}{${c}}`;
+    const i = t.indexOf(':'); const bp = i > 0 && theme.breakpoints[t.slice(0, i)];
+    return bp ? `@media (min-width:${bp}){${rule}}` : rule; // responsive token → media-wrapped
+  }).filter(Boolean).join('\n');
 
   // host-written Custom components, inlined (each exposes a `mount(el, props, on)`)
   const componentDecls = Object.entries(components).map(([name, src]) =>
     `const __custom_${name} = (function () {\n${src}\n  return mount;\n  })();`).join('\n\n  ');
+
+  // ── STORE format: one .store DOMAIN slice → shared ESM module (state + get + actions, no DOM) ──
+  if (opts.format === 'store') {
+    return `import { signal, computed, effect, __id, __has } from 'virtual:muten/runtime';
+
+const __DATA = ${JSON.stringify(data)};
+const __SOURCES = ${JSON.stringify(sources)};
+const __UUIDS = ${JSON.stringify(queryUuids)};
+const __DELAY = 450;
+const __fill = (name, rows) => { const ids = __UUIDS[name] || []; return rows.map((r) => { const o = { ...r }; for (const f of ids) if (o[f] === null || o[f] === undefined) o[f] = __id(); return o; }); };
+function __fetch(name) { const s = __SOURCES[name]; if (s) { const url = typeof s === 'string' ? s : s.url; const at = typeof s === 'string' ? null : s.at; return fetch(url).then((r) => r.json()).then((j) => __fill(name, at ? (j[at] ?? []) : (Array.isArray(j) ? j : []))); } return new Promise((res) => setTimeout(() => res(__fill(name, __DATA[name] ?? [])), __DELAY)); }
+function query(name) { const sig = signal({ data: [], loading: true, error: null }); __fetch(name).then((d) => sig.set({ data: d, loading: false, error: null })).catch((e) => sig.set({ data: [], loading: false, error: String(e) })); return sig; }
+
+${stateDecls}
+
+${getDecls}
+
+${actionDecls}
+
+${effectDecls}
+`;
+  }
+
+  // page modules import only the store domains they actually use
+  const storeImports = [...usedStores].map((d) => `import * as __store_${d} from 'virtual:muten/store/${d}';`).join('\n');
+
+  // ── STATIC page: plain HTML, NO runtime import, NO signals (Astro-like zero-JS page) ──
+  if (staticPage) {
+    return `export const screen = ${JSON.stringify(screen)};
+export const css = ${JSON.stringify(`${tokenCss}\n${projectCss}`)};
+export function mount(app) { app.innerHTML = ${JSON.stringify(staticHtml)}; return app; }
+`;
+  }
+
+  // ── MODULE format: an ESM module Vite bundles (npm imports, HMR, SPA) ──
+  if (opts.format === 'module') {
+    return `import { signal, effect, __id, __has } from 'virtual:muten/runtime';
+${storeImports}
+export const screen = ${JSON.stringify(screen)};
+export const css = ${JSON.stringify(`${opts.base ? theme.base + '\n' : ''}${tokenCss}\n${projectCss}`)};
+
+export function mount(app) {
+  const __DATA = ${JSON.stringify(data)};
+  const __SOURCES = ${JSON.stringify(sources)};
+  const __UUIDS = ${JSON.stringify(queryUuids)};
+  const __DELAY = 450;
+  const __fill = (name, rows) => {
+    const ids = __UUIDS[name] || [];
+    return rows.map((r) => { const o = { ...r }; for (const f of ids) if (o[f] === null || o[f] === undefined) o[f] = __id(); return o; });
+  };
+  function __fetch(name) {
+    const s = __SOURCES[name];
+    if (s) { const url = typeof s === 'string' ? s : s.url; const at = typeof s === 'string' ? null : s.at; return fetch(url).then((r) => r.json()).then((j) => __fill(name, at ? (j[at] ?? []) : (Array.isArray(j) ? j : []))); }
+    return new Promise((res) => setTimeout(() => res(__fill(name, __DATA[name] ?? [])), __DELAY));
+  }
+  function query(name) {
+    const sig = signal({ data: [], loading: true, error: null });
+    __fetch(name).then((d) => sig.set({ data: d, loading: false, error: null })).catch((e) => sig.set({ data: [], loading: false, error: String(e) }));
+    return sig;
+  }
+
+  ${stateDecls}
+
+  ${actionDecls}
+
+  ${componentDecls}
+
+  ${renderBody}
+  return ${hasSlot ? '__outlet' : 'app'};
+}
+`;
+  }
 
   return `<!doctype html>
 <html lang="en">
@@ -447,9 +650,8 @@ export function compile(doc, data = {}, projectCss = '', components = {}, source
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${screen}</title>
 <style>
-  /* engine: palette + base + used tokens */
-  ${PALETTE}
-  ${BASE}
+  /* engine: minimal neutral base + only the used tokens (no imposed theme) */
+  ${theme.base}
   ${tokenCss}
   /* project: overrides the above via the cascade (bring-your-own-theme) */
   ${projectCss}

@@ -32,7 +32,7 @@ const img = inner?.children?.[0];
 const btn = inner?.children?.[1];
 check('object param: $char.image → c.image', img?.props?.src?.parts?.[0]?.name === 'c.image', JSON.stringify(img?.props?.src));
 check('action param: $onSave → addFav', btn?.props?.action === 'addFav', btn?.props?.action);
-check('action arg: $char.id → c.id', btn?.props?.arg === 'c.id', btn?.props?.arg);
+check('action arg: $char.id → c.id', btn?.props?.arg?.name === 'c.id', JSON.stringify(btn?.props?.arg));
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL OK');
 process.exit(fails ? 1 : 0);

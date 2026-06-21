@@ -3,19 +3,20 @@ import { parse } from '../engine/parse.js';
 import { toDoc } from '../engine/flatten.js';
 import { validate } from '../engine/validate.js';
 import { ParseError } from '../engine/diagnostics.js';
+import { mergeTheme } from '../engine/tokens.js';
 
 let fails = 0;
 const check = (label, ok, extra = '') => {
   console.log(`${ok ? '✓' : 'x'} ${label}${ok ? '' : '   ← ' + extra}`);
   if (!ok) fails++;
 };
-const diagsOf = (src) => validate(toDoc(parse(src))).diagnostics;
+const diagsOf = (src, ctx = {}) => validate(toDoc(parse(src)), ctx).diagnostics;
 
 // 1. invalid style token → suggests the closest one + gives a position
 {
-  const d = diagsOf('screen t\nPage style(shadow.mdd) { Text "x" }').find((x) => x.code === 'unknown-token');
+  const d = diagsOf('screen t\nPage style(gap.mdd) { Text "x" }', { theme: mergeTheme({ space: { md: '16px' } }) }).find((x) => x.code === 'unknown-token');
   check('invalid token detected', !!d, 'no diagnostic');
-  check('suggests "shadow.md"', d?.suggestion === 'shadow.md', d?.suggestion);
+  check('suggests "gap.md"', d?.suggestion === 'gap.md', d?.suggestion);
   check('has loc (line/col)', !!(d?.loc?.line), JSON.stringify(d?.loc));
 }
 

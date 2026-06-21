@@ -74,7 +74,7 @@ export async function load(screenPath, sharedParts = {}) {
     mock = { ...mock, ...p.mock };
   }
 
-  const doc = toDoc({ screen: ir.screen, entities, state, actions: ir.actions, tree });
+  const doc = toDoc({ screen: ir.screen, entities, state, actions: ir.actions, consts: ir.consts, tree });
 
   const dataPath = screenPath.replace(/\.muten$/, '.data.json');
   const fileData = existsSync(dataPath) ? JSON.parse(readFileSync(dataPath, 'utf8')) : {};

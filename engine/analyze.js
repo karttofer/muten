@@ -16,6 +16,15 @@ import { compose } from './compose.js';
 import { validate } from './validate.js';
 import { closest } from './diagnostics.js';
 import { PRIMITIVE_NAMES } from './manifest.js';
+import { mergeTheme } from './tokens.js';
+
+// the project's theme.muten (scale + base) → so the editor validates token VALUES, not just shape
+export function projectTheme(filePath) {
+  const appRoot = findAppRoot(filePath);
+  if (!appRoot) return mergeTheme({});
+  try { return mergeTheme(parse(fs.readFileSync(join(appRoot, 'theme.muten'), 'utf8')).theme || {}); }
+  catch { return mergeTheme({}); }
+}
 
 // loads parts from a folder (without styles: the lint doesn't need them)
 function loadPartsLite(dir) {
@@ -62,6 +71,24 @@ function allPartsDirs(root) {
   return dirs;
 }
 
+// app-global store domains (every *.store under src/) — so .muten store refs (cart.total) validate
+export function projectStores(filePath) {
+  const appRoot = findAppRoot(filePath);
+  if (!appRoot) return [];
+  const out = [];
+  const walk = (d) => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = join(d, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith('.store')) out.push(e.name.slice(0, -'.store'.length));
+    }
+  };
+  walk(join(appRoot, 'src'));
+  return out;
+}
+
 export function projectParts(filePath) {
   const appRoot = findAppRoot(filePath);
   if (!appRoot) return loadPartsLite(join(dirname(filePath), 'parts'));
@@ -96,13 +123,17 @@ export function analyze(filePath, text) {
     return { diagnostics: e && e.loc ? [{ code: 'syntax', severity: 'error', message: String(e.message), loc: e.loc, suggestion: null }] : [] };
   }
   if (ir.routes) return analyzeRoutes(filePath, ir.routes); // app.muten = ROOT file, not a page
+  if (ir.theme) return { diagnostics: [] }; // theme.muten = a config block, not a page
+  if (filePath.endsWith('.store')) { // a .store DOMAIN slice (state + get + action), not a page
+    return validate({ screen: 'store', state: ir.state || {}, actions: ir.actions || {}, entities: ir.entities || {}, gets: ir.gets || {}, rootId: undefined, nodes: {} }, { kind: 'store' });
+  }
   const parts = projectParts(filePath);
   const { tree, used } = compose(ir.tree, parts); // resolve parts; typos survive and get flagged
   const entities = { ...ir.entities };
   const state = { ...ir.state };
   for (const n of used) { const p = parts[n]; if (p) { Object.assign(entities, p.entities); Object.assign(state, p.state); } }
-  const doc = toDoc({ screen: ir.screen, entities, state, actions: ir.actions, tree });
-  return validate(doc, { parts: Object.keys(parts) });
+  const doc = toDoc({ screen: ir.screen, entities, state, actions: ir.actions, consts: ir.consts, tree });
+  return validate(doc, { parts: Object.keys(parts), stores: projectStores(filePath), theme: projectTheme(filePath) });
 }
 
 // autocomplete context: the parts, state and actions this file knows within the WHOLE app
@@ -121,5 +152,5 @@ export function completion(filePath, text) {
   for (const [n, d] of Object.entries(ir.state || {})) addState(n, d);
   for (const def of Object.values(parts)) for (const [n, d] of Object.entries(def.state || {})) addState(n, d); // hoisted
 
-  return { parts: partList, state: stateList, actions: Object.keys(ir.actions || {}), primitives: PRIMITIVE_NAMES };
+  return { parts: partList, state: stateList, actions: Object.keys(ir.actions || {}), primitives: PRIMITIVE_NAMES, theme: projectTheme(filePath) };
 }

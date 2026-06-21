@@ -30,5 +30,5 @@ function flatten(tree) { // internal: only toDoc calls it
 // (the non-tree parts —screen/entities/state/actions— are already flat)
 export function toDoc(ir) {
   const { rootId, nodes } = flatten(ir.tree);
-  return { screen: ir.screen, entities: ir.entities, state: ir.state, actions: ir.actions, rootId, nodes };
+  return { screen: ir.screen, entities: ir.entities, state: ir.state, actions: ir.actions, consts: ir.consts || {}, rootId, nodes };
 }

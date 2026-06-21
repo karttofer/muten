@@ -49,6 +49,8 @@ function subVal(v, args) {
   if (v.kind === 'interp') return { kind: 'interp', parts: v.parts.map((p) => subVal(p, args)) };
   if (v.kind === 'bin') return { ...v, left: subVal(v.left, args), right: subVal(v.right, args) };
   if (v.kind === 'un') return { ...v, operand: subVal(v.operand, args) };
+  if (v.kind === 'tern') return { ...v, cond: subVal(v.cond, args), then: subVal(v.then, args), else: subVal(v.else, args) };
+  if (v.kind === 'lit') return v;                                                // literal: nothing to substitute
   return subObj(v, args);                                                        // generic object (e.g. source {url,at})
 }
 
