@@ -2,6 +2,10 @@
   "name": "muten",
   "version": "0.0.1",
   "description": "AI-first frontend framework — compiles .muten files to vanilla JS + signals.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/karttofer/muten.git"
+  },
   "type": "module",
   "bin": {
     "muten": "./dist/bin/muten.js"
@@ -33,6 +37,7 @@
   ],
   "license": "MIT",
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsc && node --experimental-strip-types esbuild.ts",
     "test": "npm run build && node --experimental-strip-types test/parse.ts && node --experimental-strip-types test/expr.ts && node --experimental-strip-types test/parts.ts && node --experimental-strip-types test/diagnostics.ts && node --experimental-strip-types test/routes.ts && node --experimental-strip-types test/runtime.ts && node --experimental-strip-types test/lang.ts && node --experimental-strip-types test/forms.ts && node --experimental-strip-types test/smoke.ts"
   },
