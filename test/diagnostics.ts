@@ -50,5 +50,35 @@ const diagsOf = (src, ctx = {}) => validate(toDoc(parse(src)), ctx).diagnostics;
   check('ParseError has loc', !!(err?.loc?.line), JSON.stringify(err?.loc));
 }
 
+// 6. field typo on an `each` ITEM variable → caught against the list's element entity, suggests the field
+{
+  const ent = 'entity User { name text  email email }';
+  const list = `screen t\n${ent}\nstate { users = [] : list<User> }\n`;
+  const bad = diagsOf(`${list}Page { each users as u { Text "{u.naem}" } }`).find((x) => x.code === 'unknown-member');
+  check('each item field typo detected', !!bad, 'no diagnostic');
+  check('suggests "name"', bad?.suggestion === 'name', bad?.suggestion);
+  const ok = diagsOf(`${list}Page { each users as u { Text "{u.name}" } }`);
+  check('correct each item field is clean (no false positive)', ok.length === 0, JSON.stringify(ok.map((d) => d.message)));
+}
+
+// 7. field typo on an entity-typed STATE, and member access on a scalar (which has no fields at all)
+{
+  const stTypo = diagsOf('screen t\nentity User { name text }\nstate { user = {} : User }\nPage { Text "{user.naem}" }').find((x) => x.code === 'unknown-member');
+  check('entity-state field typo detected', stTypo?.suggestion === 'name', stTypo?.suggestion);
+  const scalar = diagsOf('screen t\nstate { count = 0 : number }\nPage { Text "{count.foo}" }').find((x) => x.code === 'unknown-member');
+  check('member access on a scalar detected', !!scalar, 'no diagnostic');
+}
+
+// 8. type-mismatch (initial value vs declared type), action member typo, and the structured `fix` for auto-apply
+{
+  const tm = diagsOf('screen t\nstate { count = "" : number }\nPage { Text "x" }').find((x) => x.code === 'type-mismatch');
+  check('init/type mismatch detected', !!tm, 'no diagnostic');
+  const am = diagsOf('screen t\nstate { x = 0 : number }\naction go mutates x <- v { x.set(v) }\nPage { when go.pendng { Text "x" } }').find((x) => x.code === 'unknown-member');
+  check('action member typo → suggests pending', am?.suggestion === 'pending', am?.suggestion);
+  const fx = diagsOf('screen t\nstate { search = "" : text }\nPage { SearchField bind @serch "x" }').find((x) => x.code === 'unknown-ref');
+  check('diagnostic carries a fix {from,to}', fx?.fix?.from === '@serch' && fx?.fix?.to === '@search', JSON.stringify(fx?.fix));
+  check('diagnostic carries `related` (declaration loc)', !!fx?.related?.line, JSON.stringify(fx?.related));
+}
+
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL OK');
 process.exit(fails ? 1 : 0);

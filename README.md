@@ -10,19 +10,23 @@ npm create muten@latest my-app   # scaffold a new app (cross-platform: Windows +
 cd my-app && npm install && npm run dev
 ```
 
-## Why muten (the moat, measured)
+## Why muten
 
-For an AI the cost of code is **context + mistakes + edit-radius** — muten is built to cut all three. The
-reproducible benchmark in [`playground/`](../playground) (same app in muten / React / Vue / Svelte) shows:
+For an AI the cost of working on a codebase is **context + mistakes + edit-radius**. muten is built to cut
+all three *by construction* — these are properties of how it compiles, not marketing:
 
-- **Smaller to read & ship** — ~447 code tokens vs ~562 (Svelte), and a **~2.6 KB gzip** runtime — **7–28×
-  less JS** than the React/Vue/Svelte builds (a static page ships *zero*).
-- **A deterministic oracle** — `muten check --json` catches the typical mistakes (unknown state/action/part,
-  bad style token, illegal mutation) at compile time, in ms, no browser. The *bounded* surface is why it can.
-- **The whole app in ~80 tokens** — `app.map.json` is the index an agent reads first, instead of grepping a tree.
-- **Tiny edit radius** — adding a feature touches a few lines in one file, not a component graph.
+- **Almost nothing to ship** — no virtual DOM, no framework runtime. The *same* todo app, scaffolded by each
+  framework's official CLI and built, ships **~2.8 KB gzip** of JS in muten vs **~14 KB (Svelte) · ~24 KB (Vue)
+  · ~59 KB (React)** — **5–21× less** (a static page ships *zero*). Source is the most compact too (445 B), on
+  par with Svelte. *(Reproducible: the `bench/` folder + `node bench.mjs` in the source repo.)*
+- **A deterministic oracle** — `muten check --json` validates every page at compile time (unknown
+  state/action/part, bad style token, illegal mutation) in milliseconds, no browser — a feedback loop the
+  others don't have. A *bounded* language is what makes that possible.
+- **The whole app as data** — `app.map.json` is a compact index of routes + structure an agent reads first,
+  instead of grepping a component tree.
+- **Small edit radius** — the UI is declarative, so a change is usually a few lines in one file.
 
-That's the trade: a small, analyzable language an AI can hold in its head — not a general-purpose one it can't.
+The trade is deliberate: a small, analyzable language an AI can hold in its head — not a general-purpose one it can't.
 
 ## Capabilities
 

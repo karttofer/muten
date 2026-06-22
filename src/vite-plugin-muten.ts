@@ -88,6 +88,26 @@ if (root) {
     }
   };
 
+  // HMR fix: pages INLINE parts/data/theme and the shell/stores are virtual modules — so Vite serves their
+  // CACHED compiled output after an edit, and the change only showed up after a manual server restart.
+  // Debounced: re-read disk, DROP the cached muten modules from the graph, then full-reload — so every
+  // .muten / .store / theme / style edit is picked up live. (The missing piece was the invalidation.)
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+  const reload = (server: ViteDevServer): void => {
+    if (reloadTimer) clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => {
+      loadProject().then(() => {
+        for (const mod of server.moduleGraph.idToModuleMap.values()) {
+          const id = mod.id || '';
+          if (id.endsWith('.muten') || id.includes('virtual:muten/shell') || id.includes('virtual:muten/store/')) {
+            server.moduleGraph.invalidateModule(mod);
+          }
+        }
+        server.ws.send({ type: 'full-reload' });
+      });
+    }, 30);
+  };
+
   return {
     name: 'vite-plugin-muten',
     enforce: 'pre',
@@ -137,7 +157,8 @@ if (root) {
     },
 
     handleHotUpdate(ctx: HmrContext) {
-      if (ctx.file.endsWith('.muten') || ctx.file.endsWith('.store')) ctx.server.ws.send({ type: 'full-reload' });
+      // invalidate + reload ourselves; return [] so Vite skips its default HMR for the .muten module
+      if (ctx.file.endsWith('.muten') || ctx.file.endsWith('.store')) { reload(ctx.server); return []; }
     },
 
     // Dev only: Vite won't route a non-JS html entry (/src/app.muten) through `transform` on a direct
@@ -145,18 +166,18 @@ if (root) {
     // same entry via `transform` + Rollup.) transformRequest runs the full pipeline, so the boot's
     // imports come back already rewritten to dev URLs.
     configureServer(server: ViteDevServer) {
-      // parts / stores / theme / app.muten / styles are read from disk, NOT the module graph, so HMR
-      // never sees them. Watch them: on add/change/unlink, refresh the project cache then full-reload —
-      // so a newly added or edited part is picked up without restarting the dev server.
-      const isProjectFile = (f: string): boolean => {
+      // parts / stores / theme / app.muten / styles are read from disk (not the module graph) and pages
+      // inline them, so HMR alone never sees the change. Watch every muten-relevant file: add/change/unlink
+      // → reload() re-reads + invalidates + full-reloads (debounced, so it coexists with handleHotUpdate).
+      const onFile = (f: string): void => {
         const p = f.replace(/\\/g, '/');
-        return (p.includes('/parts/') && p.endsWith('.muten')) || p.endsWith('.store')
-          || p.endsWith('/app.muten') || p.endsWith('/theme.muten') || p.endsWith('/styles.css') || p.endsWith('/styles.scss');
+        // .muten/.store/styles + Custom component JS (src/components/*.js — pages inline these too)
+        if (p.endsWith('.muten') || p.endsWith('.store') || p.endsWith('/styles.css') || p.endsWith('/styles.scss')
+          || (p.includes('/components/') && p.endsWith('.js'))) reload(server);
       };
-      const refresh = (f: string): void => { if (isProjectFile(f)) loadProject().then(() => server.ws.send({ type: 'full-reload' })); };
-      server.watcher.on('add', refresh);
-      server.watcher.on('change', refresh);
-      server.watcher.on('unlink', refresh);
+      server.watcher.on('add', onFile);
+      server.watcher.on('change', onFile);
+      server.watcher.on('unlink', onFile);
 
       // Vite won't route a non-JS html entry (/src/app.muten) through `transform` on a direct browser
       // fetch, so serve the compiled boot for it explicitly. (The build resolves it via transform + Rollup.)

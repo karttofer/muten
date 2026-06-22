@@ -309,12 +309,15 @@ export interface Doc {
 // ── 10. Diagnostics ──────────────────────────────────────────────────────────
 
 export type Severity = 'error' | 'warning' | 'info';
+export interface Fix { from: string; to: string; } // a deterministic replacement: swap `from` for `to` at the diagnostic's loc
 export interface Diagnostic {
   code: string;
   severity: Severity;
   message: string;
   loc: Loc | null;
   suggestion: string | null;
+  fix?: Fix | null;       // auto-apply: the exact text to replace (when a suggestion exists), so an AI fixes it deterministically
+  related?: Loc | null;   // where the referenced symbol is declared (navigation), when known
 }
 export interface ValidateResult {
   ok: boolean;
@@ -325,6 +328,8 @@ export interface DiagOpts {
   loc?: Loc | null;
   suggestion?: string | null;
   severity?: Severity;
+  from?: string | null;    // the bad token → with `suggestion` becomes a `fix` { from, to }
+  related?: Loc | null;    // declaration loc of the referenced symbol
 }
 
 

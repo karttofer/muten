@@ -52,7 +52,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   // a `use`'d function call must reference a declared import (the seam to JS stays bounded + checkable)
   const checkCalls = (expr: Expr, loc?: Loc | null): void => {
     for (const fn of collectCalls(expr)) {
-      if (!externs.has(fn)) D.push(diag('unknown-function', `"${fn}" is not a use'd function`, { loc, suggestion: closest(fn, [...externs]) }));
+      if (!externs.has(fn)) D.push(diag('unknown-function', `"${fn}" is not a use'd function`, { loc, suggestion: closest(fn, [...externs]), from: fn }));
     }
   };
 
@@ -70,9 +70,9 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   for (const [d, ms] of Object.entries(ctx.storeMembers || {})) storeMemberMap.set(d, new Set(ms));
   const checkMember = (head: string, member: string, node: FlatNode): void => {
     const q = queryMembers.get(head);
-    if (q) { if (!q.has(member)) D.push(diag('unknown-member', `"${member}" is not a member of query "${head}"`, { loc: node.loc, suggestion: closest(member, [...q]) })); return; }
+    if (q) { if (!q.has(member)) D.push(diag('unknown-member', `"${member}" is not a member of query "${head}"`, { loc: node.loc, suggestion: closest(member, [...q]), from: member })); return; }
     const s = storeMemberMap.get(head);
-    if (s && !s.has(member)) D.push(diag('unknown-member', `"${member}" is not a member of store "${head}"`, { loc: node.loc, suggestion: closest(member, [...s]) }));
+    if (s && !s.has(member)) D.push(diag('unknown-member', `"${member}" is not a member of store "${head}"`, { loc: node.loc, suggestion: closest(member, [...s]), from: member }));
   };
 
   // ── state types: a `list` must declare its element (the north star — always know what's inside) ──
@@ -84,17 +84,35 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     } else if (t.startsWith('list<')) {
       const elem = t.slice(5, -1);
       if (!SCALARS.includes(elem) && !entityNames.includes(elem)) {
-        D.push(diag('unknown-type', `list element "${elem}" is not a known entity or scalar type`, { loc: def.loc, suggestion: closest(elem, [...entityNames, ...SCALARS]) }));
+        D.push(diag('unknown-type', `list element "${elem}" is not a known entity or scalar type`, { loc: def.loc, suggestion: closest(elem, [...entityNames, ...SCALARS]), from: elem }));
+      }
+    } else if (def.initial !== undefined && def.initial !== null) {
+      // a scalar state's initial value must match its declared type (e.g. `count = "" : number` is wrong)
+      const want = t === 'number' ? 'number' : t === 'bool' ? 'boolean' : (['text', 'string', 'email', 'uuid'].includes(t) ? 'string' : '');
+      if (want && typeof def.initial !== want) {
+        D.push(diag('type-mismatch', `state "${name}" is typed "${t}" but its initial value is a ${typeof def.initial}`, { loc: def.loc }));
       }
     }
   }
+
+  // an `each` item carries the element type of its list (an entity name), so a field typo on the loop var
+  // is caught exactly like one on @state — `each users as u { Text "{u.naem}" }` → "naem" not a field of User.
+  const entityFieldSet = (type: string): Set<string> | null => {
+    const ent = doc.entities?.[type];
+    return ent ? new Set(['id', ...Object.keys(ent)]) : null;
+  };
+  const listElem = (e: Expr | undefined): string => { // the element TYPE of `each <list>` (entity or scalar; '' if unresolved)
+    if (!e || e.kind !== Ek.Ref) return '';
+    const t = doc.state?.[e.name.split('.')[0]]?.type || '';
+    return t.startsWith('list<') ? t.slice(5, -1) : '';
+  };
 
   const checkRef = (value: string | undefined, node: FlatNode): void => {
     if (typeof value === 'string' && value.startsWith('@')) {
       const name = value.slice(1).split('.')[0];
       if (!stateKeys.has(name)) {
         const near = closest(name, [...stateKeys]);
-        D.push(diag('unknown-ref', `"@${name}" is not a declared state`, { loc: node.loc, suggestion: near ? '@' + near : null }));
+        D.push(diag('unknown-ref', `"@${name}" is not a declared state`, { loc: node.loc, suggestion: near ? '@' + near : null, from: '@' + name, related: near ? doc.state?.[near]?.loc ?? null : null }));
       }
     }
   };
@@ -105,27 +123,43 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     if (!value || value.startsWith('$')) return;
     if (value.includes('.')) { const dot = value.indexOf('.'); checkMember(value.slice(0, dot), value.slice(dot + 1).split('.')[0], node); return; } // store action (cart.add)
     if (!actionNames.has(value)) {
-      D.push(diag('unknown-action', `"${value}" is not a declared action`, { loc: node.loc, suggestion: closest(value, [...actionNames]) }));
+      D.push(diag('unknown-action', `"${value}" is not a declared action`, { loc: node.loc, suggestion: closest(value, [...actionNames]), from: value }));
     }
   };
 
-  // validate the variables an expression uses against (item scope ∪ state)
-  const checkExpr = (expr: Expr, node: FlatNode, scope: Set<string>): void => {
+  // validate the variables an expression uses against (item scope ∪ state). `scope` maps an in-scope item
+  // variable to its entity type ('' if not an entity list), so we can field-check the loop var too.
+  const checkExpr = (expr: Expr, node: FlatNode, scope: Map<string, string>): void => {
     checkCalls(expr, node.loc); // `use`'d function calls must be declared
     for (const ref of collectRefs(expr)) {
       const dot = ref.indexOf('.');
       const head = dot === -1 ? ref : ref.slice(0, dot);
       if (!(scope.has(head) || stateKeys.has(head) || storeDomains.has(head) || constNames.has(head) || paramNames.has(head) || actionNames.has(head))) {
-        D.push(diag('unknown-ref', `"${head}" is not a known state or item variable here`, { loc: node.loc, suggestion: closest(head, [...stateKeys, ...scope]) }));
+        D.push(diag('unknown-ref', `"${head}" is not a known state or item variable here`, { loc: node.loc, suggestion: closest(head, [...stateKeys, ...scope.keys()]), from: head }));
         continue;
       }
-      if (dot !== -1) checkMember(head, ref.slice(dot + 1).split('.')[0], node); // typo'd query/store member
+      if (dot === -1) continue;
+      const member = ref.slice(dot + 1).split('.')[0];
+      // the head's element/value type: an `each` item (scope) or a state cell. Field-check entities; a scalar
+      // has no fields at all; everything else (query / store / list) falls back to the closed member-set check.
+      const t = scope.has(head) ? (scope.get(head) || '') : (doc.state?.[head]?.type || '');
+      const fields = entityFieldSet(t);
+      if (fields) {
+        if (!fields.has(member)) D.push(diag('unknown-member', `"${member}" is not a field of ${t} (${scope.has(head) ? 'item' : 'state'} "${head}")`, { loc: node.loc, suggestion: closest(member, [...fields]), from: member }));
+      } else if (SCALARS.includes(t)) {
+        D.push(diag('unknown-member', `"${head}" is a ${t} — it has no field "${member}"`, { loc: node.loc }));
+      } else if (actionNames.has(head) && !stateKeys.has(head)) {
+        const am = new Set(['pending', 'error']); // an async action exposes only .pending / .error
+        if (!am.has(member)) D.push(diag('unknown-member', `action "${head}" exposes only .pending / .error, not "${member}"`, { loc: node.loc, suggestion: closest(member, [...am]), from: member }));
+      } else {
+        checkMember(head, member, node); // typo'd query/store member
+      }
     }
   };
 
   // ── the node tree: known type · required props · valid style tokens · resolvable expression refs ──
   const seen = new Set<string>();
-  const walk = (id: string, scope: Set<string>): void => {
+  const walk = (id: string, scope: Map<string, string>): void => {
     const n = nodes[id];
     if (!n) { D.push(diag('missing-node', `node ${id} does not exist`)); return; }
     if (seen.has(id)) { D.push(diag('dup-node', `${id} is referenced twice`, { loc: n.loc })); return; }
@@ -135,9 +169,9 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       // a foreign-framework island (use X from "svelte:…") used as a node — valid; its internals are opaque
     } else if (!KNOWN_TYPES.has(n.type)) {
       if (n.args) {
-        D.push(diag('unknown-part', `"${n.type}" is not a known part`, { loc: n.loc, suggestion: closest(n.type, [...(ctx.parts || []), ...islandNames]) }));
+        D.push(diag('unknown-part', `"${n.type}" is not a known part`, { loc: n.loc, suggestion: closest(n.type, [...(ctx.parts || []), ...islandNames]), from: n.type }));
       } else {
-        D.push(diag('unknown-type', `"${n.type}" is not a known primitive`, { loc: n.loc, suggestion: closest(n.type, [...KNOWN_TYPES]) }));
+        D.push(diag('unknown-type', `"${n.type}" is not a known primitive`, { loc: n.loc, suggestion: closest(n.type, [...KNOWN_TYPES]), from: n.type }));
       }
     } else {
       // required props from the manifest (the ones NOT ending in "?")
@@ -160,10 +194,10 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       for (const t of props.style) {
         if (!isKnownTokenShape(t)) {
           // STRICT vocabulary: the family/atom must be one Muten accepts (engine = source of truth)
-          D.push(diag('unknown-token', `"${t}" is not an accepted style token`, { loc: n.loc, suggestion: closest(t, SUGGESTED) }));
+          D.push(diag('unknown-token', `"${t}" is not an accepted style token`, { loc: n.loc, suggestion: closest(t, SUGGESTED), from: t }));
         } else if (hasValues && resolveToken(t, theme) === null) {
           // family is valid but the scale step isn't defined in THIS project's theme
-          D.push(diag('unknown-token', `"${t}": that step isn't in your theme scale`, { loc: n.loc, suggestion: closest(t, SUGGESTED) }));
+          D.push(diag('unknown-token', `"${t}": that step isn't in your theme scale`, { loc: n.loc, suggestion: closest(t, SUGGESTED), from: t }));
         }
       }
     }
@@ -181,11 +215,13 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       }
     }
 
-    // children inherit the scope; an `each` adds its item variable
-    const childScope = (n.type === Nt.Each && props.as) ? new Set([...scope, props.as]) : scope;
+    // children inherit the scope; an `each` adds its item variable, typed with the list's element entity
+    const childScope = (n.type === Nt.Each && props.as)
+      ? new Map([...scope, [props.as, listElem(props.list)] as [string, string]])
+      : scope;
     for (const c of n.children || []) walk(c, childScope);
   };
-  if (doc.rootId) walk(doc.rootId, new Set());
+  if (doc.rootId) walk(doc.rootId, new Map());
   else if (ctx.kind !== 'store') D.push(diag('no-root', 'the doc is missing a rootId'));
 
   // ── .store gets: each `get` expression resolves against the slice's own state ──
@@ -194,7 +230,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       checkCalls(expr); // `use`'d functions in a store's get
       for (const ref of collectRefs(expr)) {
         const head = ref.split('.')[0];
-        if (!stateKeys.has(head)) D.push(diag('unknown-ref', `get "${name}": "${head}" is not a state of this store`, { suggestion: closest(head, [...stateKeys]) }));
+        if (!stateKeys.has(head)) D.push(diag('unknown-ref', `get "${name}": "${head}" is not a state of this store`, { suggestion: closest(head, [...stateKeys]), from: head }));
       }
     }
   }
@@ -205,10 +241,10 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     const checkStmt = (st: Stmt): void => {
       if (st.op === StOp.If) { checkCalls(st.cond); for (const s of (st.then || [])) checkStmt(s); for (const s of (st.else || [])) checkStmt(s); return; } // recurse into branches
       if (!KNOWN_OPS.has(st.op)) {
-        D.push(diag('unknown-op', `action "${name}" uses unknown op "${st.op}"`, { suggestion: closest(st.op, [...KNOWN_OPS]) }));
+        D.push(diag('unknown-op', `action "${name}" uses unknown op "${st.op}"`, { suggestion: closest(st.op, [...KNOWN_OPS]), from: st.op }));
       }
       if ('target' in st && st.target && !declared.has(st.target)) {
-        D.push(diag('undeclared-mutation', `action "${name}" mutates "${st.target}" but only declares mutates(${[...declared].join(', ') || '∅'})`, { suggestion: closest(st.target, [...declared]) }));
+        D.push(diag('undeclared-mutation', `action "${name}" mutates "${st.target}" but only declares mutates(${[...declared].join(', ') || '∅'})`, { suggestion: closest(st.target, [...declared]), from: st.target }));
       }
       if ('arg' in st && st.arg) checkCalls(st.arg); // a use'd function called in the statement's value
     };

@@ -455,9 +455,11 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
     return bp ? `@media (min-width:${bp}){${rule}}` : rule;
   }).filter(Boolean).join('\n');
 
-  // host-written Custom components, inlined (each module exposes a `mount(el, props, on)`).
+  // host-written Custom components, inlined (each exposes `mount(el, props, on)`). The src is wrapped in an
+  // IIFE, so strip `export` keywords — the natural/documented `export function mount` would otherwise be an
+  // illegal `export` inside a function and break the whole module (a blank page).
   const componentDecls = Object.entries(components).map(([name, src]) =>
-    `const __custom_${name} = (function () {\n${src}\n  return mount;\n  })();`).join('\n\n  ');
+    `const __custom_${name} = (function () {\n${src.replace(/^[ \t]*export[ \t]+(default[ \t]+)?/gm, '')}\n  return mount;\n  })();`).join('\n\n  ');
 
   // a page imports only the store domains it actually referenced (collected into ctx.usedStores above).
   const storeImports = [...usedStores].map((domain) => `import * as __store_${domain} from 'virtual:muten/store/${domain}';`).join('\n');

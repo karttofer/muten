@@ -18,10 +18,11 @@ export class ParseError extends Error {
   }
 }
 
-// structured diagnostic: { code, severity, message, loc, suggestion }
+// structured diagnostic: { code, severity, message, loc, suggestion, fix, related }. A `from` + a `suggestion`
+// auto-build the `fix` (the deterministic replacement an AI applies).
 export function diag(code: string, message: string, opts: DiagOpts = {}): Diagnostic {
-  const { loc = null, suggestion = null, severity = 'error' } = opts;
-  return { code, severity, message, loc, suggestion };
+  const { loc = null, suggestion = null, severity = 'error', from = null, related = null } = opts;
+  return { code, severity, message, loc, suggestion, fix: (from && suggestion) ? { from, to: suggestion } : null, related };
 }
 
 // closest candidate by edit distance (Levenshtein) → the suggestion
