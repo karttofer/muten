@@ -397,6 +397,7 @@ export type FileKind = 'page' | 'store' | 'app' | 'part' | 'theme';
 export interface ValidateCtx {
   parts?: string[];
   stores?: string[];
+  storeMembers?: { [domain: string]: string[] };  // each store's members (state + gets + actions) → catch `cart.kount`
   theme?: Theme;
   kind?: FileKind;
 }

@@ -11,7 +11,7 @@ import { PRIMITIVE_NAMES, ACTION_OPS, PRIMITIVES } from '#engine/lang/manifest.j
 import { Nt, Ek, StOp } from '#engine/shared/vocab.js';
 import type { Doc, FlatNode, ValidateCtx, ValidateResult, Diagnostic, Expr, Stmt, StringPropValue } from '#engine/shared/types.js';
 
-const KNOWN_TYPES = new Set<string>(PRIMITIVE_NAMES); // from the manifest (single source)
+const KNOWN_TYPES = new Set<string>([...PRIMITIVE_NAMES, Nt.Shell]); // manifest primitives + the Shell wrapper (app.muten root)
 const REF_PROPS: Array<'bind' | 'data'> = ['bind', 'data']; // props whose value is @state
 const KNOWN_OPS = new Set<string>(ACTION_OPS);
 const SCALARS = ['text', 'number', 'bool', 'uuid', 'email', 'string'];
@@ -35,6 +35,25 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   const paramNames = new Set(doc.params || []);              // route params (`param id`)
   const actionNames = new Set(Object.keys(doc.actions || {})); // for `action.pending` / `action.error` refs
   const nodes = doc.nodes || {};
+
+  // CLOSED member sets → catch typos in a dotted ref. A query state exposes {loading,error,data} + (if it's
+  // entity-typed) its fields; a store exposes its state/gets/actions (threaded in by lintApp, cross-file).
+  const queryMembers = new Map<string, Set<string>>();
+  for (const [name, def] of Object.entries(doc.state || {})) {
+    if (!def.source?.startsWith('query:')) continue;
+    const allowed = new Set(['loading', 'error', 'data']);
+    const entity = doc.entities?.[def.type];
+    if (entity) { allowed.add('id'); for (const f of Object.keys(entity)) allowed.add(f); }
+    queryMembers.set(name, allowed);
+  }
+  const storeMemberMap = new Map<string, Set<string>>();
+  for (const [d, ms] of Object.entries(ctx.storeMembers || {})) storeMemberMap.set(d, new Set(ms));
+  const checkMember = (head: string, member: string, node: FlatNode): void => {
+    const q = queryMembers.get(head);
+    if (q) { if (!q.has(member)) D.push(diag('unknown-member', `"${member}" is not a member of query "${head}"`, { loc: node.loc, suggestion: closest(member, [...q]) })); return; }
+    const s = storeMemberMap.get(head);
+    if (s && !s.has(member)) D.push(diag('unknown-member', `"${member}" is not a member of store "${head}"`, { loc: node.loc, suggestion: closest(member, [...s]) }));
+  };
 
   // ── state types: a `list` must declare its element (the north star — always know what's inside) ──
   const entityNames = Object.keys(doc.entities || {});
@@ -60,13 +79,26 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     }
   };
 
+  // an action ref (`-> action`, `submit action`): a bare name must be a declared action. Dotted (store
+  // action, `cart.add`) and $param (part callback) refs resolve elsewhere (cross-file / compose) — skip.
+  const checkAction = (value: string | undefined, node: FlatNode): void => {
+    if (!value || value.startsWith('$')) return;
+    if (value.includes('.')) { const dot = value.indexOf('.'); checkMember(value.slice(0, dot), value.slice(dot + 1).split('.')[0], node); return; } // store action (cart.add)
+    if (!actionNames.has(value)) {
+      D.push(diag('unknown-action', `"${value}" is not a declared action`, { loc: node.loc, suggestion: closest(value, [...actionNames]) }));
+    }
+  };
+
   // validate the variables an expression uses against (item scope ∪ state)
   const checkExpr = (expr: Expr, node: FlatNode, scope: Set<string>): void => {
     for (const ref of collectRefs(expr)) {
-      const head = ref.split('.')[0];
-      if (scope.has(head) || stateKeys.has(head) || storeDomains.has(head) || constNames.has(head) || paramNames.has(head) || actionNames.has(head)) continue;
-      const near = closest(head, [...stateKeys, ...scope]);
-      D.push(diag('unknown-ref', `"${head}" is not a known state or item variable here`, { loc: node.loc, suggestion: near }));
+      const dot = ref.indexOf('.');
+      const head = dot === -1 ? ref : ref.slice(0, dot);
+      if (!(scope.has(head) || stateKeys.has(head) || storeDomains.has(head) || constNames.has(head) || paramNames.has(head) || actionNames.has(head))) {
+        D.push(diag('unknown-ref', `"${head}" is not a known state or item variable here`, { loc: node.loc, suggestion: closest(head, [...stateKeys, ...scope]) }));
+        continue;
+      }
+      if (dot !== -1) checkMember(head, ref.slice(dot + 1).split('.')[0], node); // typo'd query/store member
     }
   };
 
@@ -97,6 +129,8 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
 
     const props = n.props || {};
     for (const rp of REF_PROPS) if (rp in props) checkRef(props[rp], n);
+    if (props.action) checkAction(props.action, n);
+    if (props.submit) checkAction(props.submit, n);
     if (Array.isArray(props.style)) {
       const theme = ctx.theme || defaultTheme;
       const hasValues = Object.keys(theme.space || {}).length > 0; // a real project theme is present
@@ -117,6 +151,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     if ((n.type === Nt.Text || n.type === Nt.Title || n.type === Nt.Span) && props.value) interps.push(props.value);
     if (n.type === Nt.Image) { if (props.src) interps.push(props.src); if (props.alt) interps.push(props.alt); }
     if (n.type === Nt.Link && props.to) interps.push(props.to);
+    if (props.label) interps.push(props.label); // Link/Button/RowAction labels interpolate too
     for (const ip of interps) {
       if (typeof ip === 'object' && 'kind' in ip && ip.kind === Ek.Interp) {
         for (const part of ip.parts) if (typeof part !== 'string') checkExpr(part, n, scope);
