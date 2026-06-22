@@ -47,6 +47,18 @@ export class Logic {
     return Object.entries(entity).filter(([, type]) => type === 'uuid').map(([field]) => field);
   }
 
+  // does a body contain a server write (create/update/delete)? — recursing into if-branches.
+  private bodyHasWrite(body: Stmt[]): boolean {
+    return body.some((st) => st.op === StOp.Create || st.op === StOp.Update || st.op === StOp.Delete || st.op === StOp.Request
+      || (st.op === StOp.If && (this.bodyHasWrite(st.then || []) || this.bodyHasWrite(st.else || []))));
+  }
+  // actions that write → they become async and expose live `.pending` / `.error` signals. Memoized.
+  private writeActionsSet: Set<string> | null = null;
+  private writeActions(): Set<string> {
+    if (!this.writeActionsSet) this.writeActionsSet = new Set(Object.entries(this.ctx.actions).filter(([, a]) => this.bodyHasWrite(a.body || [])).map(([n]) => n));
+    return this.writeActionsSet;
+  }
+
   // resolve a dotted reference to runtime JS, honouring scope:
   //   a lambda local stays bare · a query reads `.data` (or `.loading`/`.error`) · a local state
   //   reads `.get()` · a store member reads through its module · a const inlines · else it is an
@@ -55,6 +67,7 @@ export class Logic {
     const [head, ...rest] = name.split('.');
     const tail = rest.length ? '.' + rest.join('.') : '';
     if (scope.locals.has(head)) return head + tail;
+    if (this.ctx.params.has(head)) return head + tail;        // a route param: a local string injected at mount
     if (this.ctx.queryStates.has(head)) {
       if (rest[0] === 'loading' || rest[0] === 'error') return `${head}.get()${tail}`;
       return `${head}.get().data${tail}`;                 // @users → the data array; @users.length → its length
@@ -66,6 +79,9 @@ export class Logic {
       if (this.inStore(head, member, 'state') || this.inStore(head, member, 'gets')) { this.ctx.usedStores.add(head); return `__store_${head}.${member}.get()${more}`; }
     }
     if (this.ctx.consts[head] !== undefined) return JSON.stringify(rest.length ? null : this.ctx.consts[head]); // scalar const, inlined
+    if (this.writeActions().has(head) && (rest[0] === 'pending' || rest[0] === 'error')) { // a write action's live status
+      return `${rest[0] === 'pending' ? '__pending_' : '__error_'}${head}.get()`;
+    }
     return head + tail;                                    // an action input parameter (e.g. id)
   }
 
@@ -94,13 +110,13 @@ export class Logic {
   // ── action statements ──────────────────────────────────────────────────────
 
   // one mutation statement (in an action body or a .store effect) → JS line(s). `if` recurses.
-  stmtLines(st: Stmt, scope: Scope): string[] {
+  stmtLines(st: Stmt, scope: Scope, isAsync = false): string[] {
     const ctx = this.ctx;
     const out: string[] = [];
     if (st.op === StOp.If) {
       out.push(`if (${this.compileExpr(st.cond, scope)}) {`);
-      for (const s of st.then || []) for (const l of this.stmtLines(s, scope)) out.push('  ' + l);
-      if (st.else) { out.push('} else {'); for (const s of st.else) for (const l of this.stmtLines(s, scope)) out.push('  ' + l); }
+      for (const s of st.then || []) for (const l of this.stmtLines(s, scope, isAsync)) out.push('  ' + l);
+      if (st.else) { out.push('} else {'); for (const s of st.else) for (const l of this.stmtLines(s, scope, isAsync)) out.push('  ' + l); }
       out.push('}');
       return out;
     }
@@ -128,6 +144,33 @@ export class Logic {
       out.push(ctx.queryStates.has(st.target)
         ? `${st.target}.set({ ...${st.target}.get(), data: ${st.target}.get().data.filter((${st.param}) => !(${pred})) });`
         : `${st.target}.set(${st.target}.get().filter((${st.param}) => !(${pred})));`);
+    } else if (st.op === StOp.Create || st.op === StOp.Update || st.op === StOp.Delete) {
+      // server CRUD on a source-backed list: POST/PUT/DELETE the item, then reflect the change in the list.
+      const isQuery = ctx.queryStates.has(st.target);
+      const cur = isQuery ? `${st.target}.get().data` : `${st.target}.get()`;
+      const set = (data: string): string => isQuery ? `${st.target}.set({ ...${st.target}.get(), data: ${data} })` : `${st.target}.set(${data})`;
+      const err = isQuery ? `.catch((__e) => ${st.target}.set({ ...${st.target}.get(), error: String(__e) }))` : '';
+      const name = JSON.stringify(st.target);
+      const value = this.compileExpr(st.arg, scope);
+      if (isAsync) { // OPTIMISTIC: apply now (instant UI), reconcile with the server row on success, revert on failure.
+        if (st.op === StOp.Create) out.push(`{ const __i = { ...${value} }; if (__i.id == null) __i.id = __id(); const __prev = ${cur}; ${set(`[...__prev, __i]`)}; try { const __r = await __write(${name}, 'POST', null, __i); ${set(`${cur}.map((__x) => __x.id === __i.id ? __r : __x)`)}; } catch (__e) { ${set('__prev')}; throw __e; } }`);
+        else if (st.op === StOp.Update) out.push(`{ const __i = ${value}; const __prev = ${cur}; ${set(`__prev.map((__x) => __x.id === __i.id ? __i : __x)`)}; try { const __r = await __write(${name}, 'PUT', __i.id, __i); ${set(`${cur}.map((__x) => __x.id === __i.id ? __r : __x)`)}; } catch (__e) { ${set('__prev')}; throw __e; } }`);
+        else out.push(`{ const __i = ${value}; const __prev = ${cur}; ${set(`__prev.filter((__x) => __x.id !== __i.id)`)}; try { await __write(${name}, 'DELETE', __i.id, null); } catch (__e) { ${set('__prev')}; throw __e; } }`);
+      } else { // fire-and-forget (e.g. inside a .store effect): reflect on resolve, set the query error on failure
+        if (st.op === StOp.Create) out.push(`{ const __i = ${value}; __write(${name}, 'POST', null, __i).then((__r) => ${set(`[...${cur}, __r]`)})${err}; }`);
+        else if (st.op === StOp.Update) out.push(`{ const __i = ${value}; __write(${name}, 'PUT', __i.id, __i).then((__r) => ${set(`${cur}.map((__x) => __x.id === __i.id ? __r : __x)`)})${err}; }`);
+        else out.push(`{ const __i = ${value}; __write(${name}, 'DELETE', __i.id, null).then(() => ${set(`${cur}.filter((__x) => __x.id !== __i.id)`)})${err}; }`);
+      }
+    } else if (st.op === StOp.Refetch) {
+      // re-run a query with N query-string params (pagination / search / filters) → updates its signal.
+      const pairs = Object.entries(st.params).map(([k, e]) => `${JSON.stringify(k)}: ${this.compileExpr(e, scope)}`).join(', ');
+      out.push(`__refetch(${JSON.stringify(st.target)}, { ${pairs} }, ${st.target});`);
+    } else if (st.op === StOp.Request) {
+      // explicit non-REST request (escape hatch): build the url (with interpolation) + send the optional body.
+      const url = typeof st.url === 'string' ? JSON.stringify(st.url)
+        : st.url.parts.map((p) => typeof p === 'string' ? JSON.stringify(p) : `String(${this.compileExpr(p, scope)})`).join(' + ');
+      const body = st.body ? this.compileExpr(st.body, scope) : 'null';
+      out.push(isAsync ? `await __send(${url}, ${JSON.stringify(st.method)}, ${body});` : `__send(${url}, ${JSON.stringify(st.method)}, ${body}).catch(() => {});`);
     }
     return out;
   }
@@ -152,15 +195,28 @@ export class Logic {
   // that state directly). Exported for a .store slice so pages can import them.
   genActions(): string {
     const exp = this.ctx.format === Fmt.Store ? 'export ' : '';
+    const decls: string[] = []; // .pending/.error signals for write actions, hoisted above the functions
     const out: string[] = [];
     for (const [name, action] of Object.entries(this.ctx.actions)) {
       const inputIsState = this.ctx.stateKeys.has(action.input);
       const scope: Scope = { locals: new Set(), input: action.input, inputIsState };
-      out.push(`${exp}function ${name}(${inputIsState ? '' : action.input}) {`);
-      for (const st of action.body || []) for (const l of this.stmtLines(st, scope)) out.push('  ' + l);
-      out.push('}');
+      const param = inputIsState ? '' : action.input;
+      if (this.writeActions().has(name)) { // talks to the backend → async, with live .pending / .error
+        decls.push(`${exp}const __pending_${name} = signal(false);`, `${exp}const __error_${name} = signal(null);`);
+        out.push(`${exp}async function ${name}(${param}) {`);
+        out.push(`  __pending_${name}.set(true); __error_${name}.set(null);`);
+        out.push('  try {');
+        for (const st of action.body || []) for (const l of this.stmtLines(st, scope, true)) out.push('    ' + l);
+        out.push(`  } catch (__e) { __error_${name}.set(String(__e)); }`);
+        out.push(`  __pending_${name}.set(false);`);
+        out.push('}');
+      } else {
+        out.push(`${exp}function ${name}(${param}) {`);
+        for (const st of action.body || []) for (const l of this.stmtLines(st, scope)) out.push('  ' + l);
+        out.push('}');
+      }
     }
-    return out.join('\n  ');
+    return [...decls, ...out].join('\n  ');
   }
 
   // .store reactive side-effects → effect(() => { … }), re-running when the state they read changes.

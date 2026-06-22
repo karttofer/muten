@@ -17,7 +17,7 @@
 import { tokenClass, resolveToken, defaultTheme } from '#engine/style/tokens.js';
 import { Nt, Ek, Fmt, Fk } from '#engine/shared/vocab.js';
 import { customValue, CONTAINERS, parseClause, editableFields } from '#engine/compile/helpers.js';
-import { emitStore, emitStatic, emitModule, emitHtml } from '#engine/compile/emit.js';
+import { emitStore, emitStatic, emitStaticHtml, emitSsr, emitModule, emitHtml } from '#engine/compile/emit.js';
 import { Logic } from '#engine/compile/logic.js';
 import type {
   Doc, NodeProps, Theme, Scope, Interp, StringPropValue, Value,
@@ -51,7 +51,8 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   const classFor = (base: string, props: NodeProps): string => {
     for (const token of props.style || []) usedTokens.add(token);
     // style() = analyzable Muten tokens; class() = raw look (your CSS / Tailwind) passed straight through.
-    return [base, ...(props.style || []).map(tokenClass), ...(props.class || [])].join(' ');
+    // a conditional class (`name when cond`) is omitted here — genDynamics toggles it reactively.
+    return [base, ...(props.style || []).map(tokenClass), ...(props.class || []).filter((c): c is string => typeof c === 'string')].join(' ');
   };
 
   // The shared compile context + the behaviour compiler that reads it (see logic.ts). `usedStores`
@@ -63,10 +64,16 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   const usedStores = new Set<string>();
   const ctx: CompileCtx = {
     state, entities, actions: doc.actions, consts: doc.consts || {}, gets: doc.gets || {}, effects: doc.effects || [],
-    stateKeys, queryStates, stores: opts.stores || {}, usedStores, format: opts.format,
+    stateKeys, queryStates, stores: opts.stores || {}, usedStores, params: new Set(doc.params || []), format: opts.format,
   };
   const logic = new Logic(ctx);
   const pageScope: Scope = { locals: new Set() }; // page-level expressions (interpolation, when/each)
+
+  // reactive bits on an element: conditional classes (`class(active when cond)`) + events (`on(keydown: fn)`).
+  const genDynamics = (id: string, p: NodeProps): void => {
+    for (const c of p.class || []) if (typeof c !== 'string') lines.push(`effect(() => el_${id}.classList.toggle(${JSON.stringify(c.name)}, !!(${logic.compileExpr(c.cond, pageScope)})));`);
+    for (const [event, act] of Object.entries(p.on || {})) if (typeof act === 'string') lines.push(`el_${id}.addEventListener(${JSON.stringify(event)}, () => ${logic.actionRef(act)}());`);
+  };
 
   const genChildren = (id: string, parentVar: string): void => {
     for (const childId of nodes[id].children) genNode(childId, parentVar);
@@ -113,6 +120,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
       lines.push(`el_${id}.className = ${JSON.stringify(classFor(base, p))};`);
       if (n.type === Nt.Nav && typeof p.label === 'string') lines.push(`el_${id}.setAttribute('aria-label', ${JSON.stringify(p.label)});`);
       lines.push(`${parentVar}.appendChild(el_${id});`);
+      genDynamics(id, p);
       genChildren(id, `el_${id}`);
       return;
     }
@@ -234,9 +242,9 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         break;
       }
 
-      case Nt.Text: genTextEl(id, 'p', classFor('text', p), p.value, parentVar); break;
-      case Nt.Span: genTextEl(id, 'span', classFor('span', p), p.value, parentVar); break;
-      case Nt.Title: genTextEl(id, p.level || 'h1', classFor('title', p), p.value, parentVar); break; // level via keyword; <h1> default
+      case Nt.Text: genTextEl(id, 'p', classFor('text', p), p.value, parentVar); genDynamics(id, p); break;
+      case Nt.Span: genTextEl(id, 'span', classFor('span', p), p.value, parentVar); genDynamics(id, p); break;
+      case Nt.Title: genTextEl(id, p.level || 'h1', classFor('title', p), p.value, parentVar); genDynamics(id, p); break; // level via keyword; <h1> default
 
       case Nt.Image: {
         lines.push(`const el_${id} = document.createElement('img');`);
@@ -308,16 +316,18 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
           const arg = p.arg !== undefined ? logic.compileExpr(p.arg, pageScope) : '';
           lines.push(`el_${id}.addEventListener('click', () => ${logic.actionRef(p.action)}(${arg}));`);
         }
+        genDynamics(id, p);
         lines.push(`${parentVar}.appendChild(el_${id});`);
         break;
       }
 
-      case Nt.Link: { // client-side navigation → <a href="#/route"> (the reactive hash router handles it)
+      case Nt.Link: { // client-side navigation → <a href="/route"> (the history router intercepts the click)
         lines.push(`const el_${id} = document.createElement('a');`);
         lines.push(`el_${id}.className = ${JSON.stringify(classFor('link', p))};`);
-        lines.push(`el_${id}.href = ${JSON.stringify('#' + (p.to || '/'))};`);
+        lines.push(`el_${id}.href = ${JSON.stringify(p.to || '/')};`);
         if (n.children && n.children.length) genChildren(id, `el_${id}`);          // children ⇒ a clickable card that navigates
         else if (p.label !== undefined) genInterpAttr(id, 'textContent', p.label);
+        genDynamics(id, p);
         lines.push(`${parentVar}.appendChild(el_${id});`);
         break;
       }
@@ -342,7 +352,8 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
 
   // Is this page fully static? — no reactive primitive, no reactive prop, no { } interpolation.
   function isStatic(): boolean {
-    if (opts.format !== Fmt.Module) return false; // store/html are never static; the shell is excluded by its `slot`
+    if (opts.format === Fmt.Store) return false;  // a store has no DOM; the shell is excluded by its `slot` (a reactive type)
+    if ((doc.params || []).length) return false;  // a param page needs mount(app, params) — never the static path
     const reactiveType = new Set<string>([Nt.When, Nt.Each, Nt.Custom, Nt.Form, Nt.SearchField, Nt.DataTable, Nt.Slot]);
     const reactiveProp: Array<keyof NodeProps> = ['action', 'bind', 'submit', 'on', 'inputs', 'data'];
     const interpKeys: Array<keyof NodeProps> = ['value', 'src', 'alt', 'label'];
@@ -350,6 +361,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
       const n = nodes[id]; const p = n.props || {};
       if (reactiveType.has(n.type)) return false;
       if (reactiveProp.some((k) => p[k] !== undefined)) return false;
+      if ((p.class || []).some((c) => typeof c !== 'string')) return false; // a reactive class toggle ⇒ not static
       if (interpKeys.some((k) => { const v = p[k]; return !!v && typeof v === 'object' && 'kind' in v && v.kind === Ek.Interp; })) return false;
     }
     return true;
@@ -367,14 +379,16 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
       case Nt.Span: return `<span${cls('span')}>${escHtml(strOf(p.value))}</span>`;
       case Nt.Title: { const lvl = p.level || 'h1'; return `<${lvl}${cls('title')}>${escHtml(strOf(p.value))}</${lvl}>`; }
       case Nt.Image: return `<img${cls('image')} src="${escAttr(strOf(p.src))}" alt="${escAttr(strOf(p.alt))}">`;
-      case Nt.Link: return `<a${cls('link')} href="${escAttr('#' + (p.to || '/'))}">${(n.children && n.children.length) ? kids() : escHtml(strOf(p.label))}</a>`;
+      case Nt.Link: return `<a${cls('link')} href="${escAttr(p.to || '/')}">${(n.children && n.children.length) ? kids() : escHtml(strOf(p.label))}</a>`;
       case Nt.Button: return `<button${cls('button')}>${(n.children && n.children.length) ? kids() : escHtml(strOf(p.label))}</button>`;
       default: return '';
     }
   }
 
   // ── orchestrate: compile every piece, then hand them to the right emit target ──────────────
-  const staticPage = isStatic();
+  const staticPage = opts.format === Fmt.Ssr ? false : isStatic(); // SSR always renders the tree (genNode) to serialize it
+  // route params → local string consts read from the mount() argument (set by the router on match).
+  const paramDecls = (doc.params || []).map((p) => `const ${p} = (__params || {})[${JSON.stringify(p)}] ?? '';`).join('\n  ');
   const stateDecls = logic.genState();
   const actionDecls = logic.genActions();
   const getDecls = Object.entries(doc.gets || {}).map(([name, expr]) => `export const ${name} = computed(() => ${logic.compileExpr(expr, pageScope)});`).join('\n');
@@ -411,13 +425,20 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   // a page imports only the store domains it actually referenced (collected into ctx.usedStores above).
   const storeImports = [...usedStores].map((domain) => `import * as __store_${domain} from 'virtual:muten/store/${domain}';`).join('\n');
 
+  // page <head> meta: title/description from the `meta` block, with og:* auto-derived (one source, no DRY).
+  const metaIn = doc.meta || {};
+  const meta: { [k: string]: string } = { ...metaIn };
+  if (metaIn.title && !meta['og:title']) meta['og:title'] = metaIn.title;
+  if (metaIn.description && !meta['og:description']) meta['og:description'] = metaIn.description;
+
   const parts: EmitParts = {
-    screen, tokenCss, projectCss, data, sources, queryUuids,
-    stateDecls, actionDecls, getDecls, effectDecls, componentDecls, storeImports,
+    screen, tokenCss, projectCss, data, sources, api: opts.api || {}, meta, queryUuids,
+    stateDecls, paramDecls, actionDecls, getDecls, effectDecls, componentDecls, storeImports,
     renderBody, staticHtml: staticHtml ?? '', hasSlot,
   };
   if (opts.format === Fmt.Store) return emitStore(parts);
-  if (staticPage) return emitStatic(parts);
+  if (opts.format === Fmt.Ssr) return emitSsr(parts); // build-time pre-render factory (executed against a fake DOM)
+  if (staticPage) return opts.format === Fmt.Module ? emitStatic(parts) : emitStaticHtml(parts);
   if (opts.format === Fmt.Module) return emitModule(parts);
   return emitHtml(parts);
 }

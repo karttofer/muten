@@ -9,3 +9,4 @@ where a single page becomes a real, project-aware build, and where the editor's 
 | `analyze.ts` | The project-aware analyzer behind the live linter/autocomplete: loads all parts, hoists their state so `@refs` validate for real, knows the store domains + theme. Consumed by the VS Code extension and the CLI. |
 | `routes.ts` | Reads `src/app.muten` → the route table (the app root); throws on a missing/duplicate/dangling route. |
 | `styles.ts` | Resolves a page's colocated stylesheet (`.css`, or `.scss` via the optional `sass` dependency). |
+| `ssr.ts` | Build-time SSR/SSG: a minimal DOM the compiled page runs against, so a reactive page pre-renders to real HTML by executing the **real** compiler output (no parallel renderer to drift) + `fetchSources` (fetch a page's GET `sources` at build, applying the `api` config, so source-backed lists pre-render too). |

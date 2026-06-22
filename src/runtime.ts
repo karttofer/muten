@@ -71,19 +71,50 @@ export function injectCss(css: string): void {
   document.head.appendChild(style);
 }
 
-// Hash router: mount the active route's page module into `outlet`, swapping on hashchange. A guard is
-// a () => boolean reading a store signal; when it flips (login/logout) the tracking effect re-runs, so
-// the navbar and routes react to auth automatically.
+// Apply a page's `meta` to <head>: set the title and upsert each meta tag (og:* → property, else name).
+export function applyMeta(meta: { [key: string]: string }): void {
+  if (meta.title) document.title = meta.title;
+  for (const name in meta) {
+    if (name === 'title' || !meta[name]) continue;
+    const attr = name.indexOf('og:') === 0 ? 'property' : 'name';
+    let el = document.head.querySelector(`meta[${attr}="${name}"]`);
+    if (!el) { el = document.createElement('meta'); el.setAttribute(attr, name); document.head.appendChild(el); }
+    el.setAttribute('content', meta[name]);
+  }
+}
+
+// History router: real-path URLs (`/about`, `/product/42`). Intercepts internal <a> clicks for client-side
+// navigation, syncs on popstate, scrolls to top, applies each page's <head> meta, and falls back to the
+// first route as a soft 404. A guard is a () => boolean over a store signal; when it flips the tracking
+// effect re-runs, so routes + navbar react to auth automatically. (Deploy: serve index.html for any path.)
 export function route(outlet: Element, routes: { [path: string]: RouteDef }): void {
   const keys = Object.keys(routes);
+  // pre-split each route key into segments; a ":x" segment matches any value and captures it as `x`.
+  const patterns = keys.map((key) => ({ key, segs: key.replace(/^\//, '').split('/').filter(Boolean) }));
+  // match a path to a route + capture its `:params`; fall back to the first route (a soft 404).
+  const matchRoute = (path: string): { def: RouteDef; params: { [k: string]: string } } => {
+    const parts = path.replace(/^\//, '').split('/').filter(Boolean);
+    for (const { key, segs } of patterns) {
+      if (segs.length !== parts.length) continue;
+      const params: { [k: string]: string } = {};
+      let ok = true;
+      for (let i = 0; i < segs.length; i++) {
+        if (segs[i][0] === ':') params[segs[i].slice(1)] = decodeURIComponent(parts[i]);
+        else if (segs[i] !== parts[i]) { ok = false; break; }
+      }
+      if (ok) return { def: routes[key], params };
+    }
+    return { def: routes['/404'] || routes[keys[0]], params: {} }; // no match → a `/404` page if defined, else the first route
+  };
   let mounted: string | null = null;        // path currently shown (don't re-mount on every auth tick)
   let disposePage: (() => void) | null = null;
+  const go = (to: string): void => { if (to !== location.pathname) { history.pushState({}, '', to); mounted = null; render(); } };
   const render = (): void => {
-    const path = (location.hash || '').replace(/^#/, '') || keys[0];
-    const def = routes[path] || routes[keys[0]];
-    if (def.guard && !def.guard()) {          // unauthorized → redirect (the hashchange re-triggers render)
-      const to = '#' + (def.redirect ?? '');
-      if (location.hash !== to) location.hash = def.redirect ?? '';
+    const path = location.pathname || keys[0];
+    const { def, params } = matchRoute(path);
+    if (def.guard && !def.guard()) {          // unauthorized → redirect (replaceState, then re-render)
+      const to = def.redirect ?? '/';
+      if (location.pathname !== to) { history.replaceState({}, '', to); mounted = null; render(); }
       return;
     }
     if (path === mounted) return;
@@ -91,9 +122,25 @@ export function route(outlet: Element, routes: { [path: string]: RouteDef }): vo
     if (disposePage) disposePage();           // stop the previous page's effects → no stale-DOM crashes
     disposePage = null;
     outlet.replaceChildren();
-    def.load().then((module: PageModule) => { injectCss(module.css); disposePage = scope(() => { module.mount(outlet); }); });
+    scrollTo(0, 0);
+    def.load().then((module: PageModule) => {
+      injectCss(module.css);
+      if (module.meta) applyMeta(module.meta);
+      disposePage = scope(() => { module.mount(outlet, params); });
+    });
   };
-  addEventListener('hashchange', () => { mounted = null; render(); });
+  // intercept internal link clicks → client-side navigation (external / new-tab / downloads pass through)
+  addEventListener('click', (e: Event) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    const a = t.closest('a');
+    if (!a) return;
+    const href = a.getAttribute('href');
+    if (!href || href[0] === '#' || a.getAttribute('target') || a.hasAttribute('download') || /^[a-z]+:|^\/\//i.test(href)) return;
+    e.preventDefault();
+    go(href);
+  });
+  addEventListener('popstate', () => { mounted = null; render(); });
   // track every guard signal so logging in/out re-renders the active route automatically.
   effect(() => { for (const key of keys) { const guard = routes[key].guard; if (guard) guard(); } render(); });
 }

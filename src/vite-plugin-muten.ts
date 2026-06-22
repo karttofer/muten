@@ -78,28 +78,36 @@ if (root) {
 }`;
   };
 
+  // (Re)scan the project: parts, store slices, app root, theme, stylesheet. Run at startup AND whenever
+  // one of those files changes in dev — they're read from disk (not the module graph), so without this
+  // the startup cache goes stale and a newly added/edited part wrongly reports "not a known part".
+  const loadProject = async (): Promise<void> => {
+    parts = await loadAllParts(appRoot);
+    for (const k of Object.keys(storesMeta)) delete storesMeta[k]; // drop stale store metadata first
+    if (storeEnabled) {
+      slices = findStores(join(appRoot, 'src'));
+      for (const [domain, ir] of Object.entries(slices)) {
+        storesMeta[domain] = { state: Object.keys(ir.state || {}), gets: Object.keys(ir.gets || {}), actions: Object.keys(ir.actions || {}) };
+      }
+    }
+    const rootFile = join(appRoot, 'src', 'app.muten');
+    appIr = existsSync(rootFile) ? parse(readFileSync(rootFile, 'utf8')) : undefined;
+    const themeFile = join(appRoot, 'theme.muten');
+    theme = existsSync(themeFile) ? mergeTheme(parse(readFileSync(themeFile, 'utf8')).theme || {}) : mergeTheme(options.theme);
+    stylesHref = null;
+    for (const name of ['styles.css', 'styles.scss']) {
+      if (existsSync(join(appRoot, 'src', name))) { stylesHref = '/src/' + name; break; }
+    }
+  };
+
   return {
     name: 'vite-plugin-muten',
     enforce: 'pre',
 
-    // resolve the project: gather parts, store slices, the app root and the theme — once, up front.
+    // resolve the project once at startup (parts, stores, app root, theme); refreshed on change in dev.
     async configResolved(config: ResolvedConfig) {
       appRoot = config.root;
-      parts = await loadAllParts(appRoot);
-      if (storeEnabled) {
-        slices = findStores(join(appRoot, 'src'));
-        for (const [domain, ir] of Object.entries(slices)) {
-          storesMeta[domain] = { state: Object.keys(ir.state || {}), gets: Object.keys(ir.gets || {}), actions: Object.keys(ir.actions || {}) };
-        }
-      }
-      const rootFile = join(appRoot, 'src', 'app.muten');
-      if (existsSync(rootFile)) appIr = parse(readFileSync(rootFile, 'utf8'));
-      const themeFile = join(appRoot, 'theme.muten');
-      if (existsSync(themeFile)) theme = mergeTheme(parse(readFileSync(themeFile, 'utf8')).theme || {});
-      // the project's look: imported by the boot module so the app needs no hand-written entry.
-      for (const name of ['styles.css', 'styles.scss']) {
-        if (existsSync(join(appRoot, 'src', name))) { stylesHref = '/src/' + name; break; }
-      }
+      await loadProject();
     },
 
     resolveId(id: string) { if (id === RID || id === SHELL || id.startsWith(STORE_PREFIX)) return '\0' + id; },
@@ -137,7 +145,7 @@ if (root) {
         if (existsSync(path)) components[name] = readFileSync(path, 'utf8');
       }
 
-      return { code: compileModule(loaded.doc, loaded.data, loaded.styles.css, components, loaded.sources, { stores: storesMeta, theme }), map: null };
+      return { code: compileModule(loaded.doc, loaded.data, loaded.styles.css, components, loaded.sources, { stores: storesMeta, theme, api: appIr?.api || {} }), map: null };
     },
 
     handleHotUpdate(ctx: HmrContext) {
@@ -149,6 +157,21 @@ if (root) {
     // same entry via `transform` + Rollup.) transformRequest runs the full pipeline, so the boot's
     // imports come back already rewritten to dev URLs.
     configureServer(server: ViteDevServer) {
+      // parts / stores / theme / app.muten / styles are read from disk, NOT the module graph, so HMR
+      // never sees them. Watch them: on add/change/unlink, refresh the project cache then full-reload —
+      // so a newly added or edited part is picked up without restarting the dev server.
+      const isProjectFile = (f: string): boolean => {
+        const p = f.replace(/\\/g, '/');
+        return (p.includes('/parts/') && p.endsWith('.muten')) || p.endsWith('.store')
+          || p.endsWith('/app.muten') || p.endsWith('/theme.muten') || p.endsWith('/styles.css') || p.endsWith('/styles.scss');
+      };
+      const refresh = (f: string): void => { if (isProjectFile(f)) loadProject().then(() => server.ws.send({ type: 'full-reload' })); };
+      server.watcher.on('add', refresh);
+      server.watcher.on('change', refresh);
+      server.watcher.on('unlink', refresh);
+
+      // Vite won't route a non-JS html entry (/src/app.muten) through `transform` on a direct browser
+      // fetch, so serve the compiled boot for it explicitly. (The build resolves it via transform + Rollup.)
       server.middlewares.use((req, res, next) => {
         if ((req.url || '').split('?')[0] !== '/src/app.muten') { next(); return; }
         server.transformRequest('/src/app.muten').then((result) => {

@@ -22,9 +22,10 @@ export type Scalar = string | number | boolean | null;
 export type Value = Scalar | Value[] | ValueObject;
 export interface ValueObject { [key: string]: Value; }
 
-/** A real data source for a query: a bare URL, or a URL + the JSON path to read.
- *  (The parser stores sources as raw `Value`; the build plugin interprets them as this shape.) */
-export type Source = string | { url: string; at?: string };
+/** A real data source for a query: a bare URL, or a complete HTTP request (method, headers, body, and
+ *  the JSON path to the array). (The parser stores sources as raw `Value`; build + runtime read them
+ *  through engine/shared/source.ts, the single definition of these semantics.) */
+export type Source = string | { url: string; method?: string; headers?: { [k: string]: string }; body?: Value; at?: string };
 
 /** A manifest prop's type hint (`"?"` marks optional) — the vocabulary the linter shows. */
 export type PropHint =
@@ -104,8 +105,16 @@ export interface PushStmt { op: StOp.Push; target: string; arg: Expr; }
 export interface SetStmt { op: StOp.Set; target: string; arg: Expr; }
 export interface ResetStmt { op: StOp.Reset; target: string; }
 export interface RemoveStmt { op: StOp.Remove; target: string; param: string; pred: Expr; }
+/** Server CRUD on a source-backed list: POST/PUT/DELETE the item, then reflect the result in the list. */
+export interface CreateStmt { op: StOp.Create; target: string; arg: Expr; }
+export interface UpdateStmt { op: StOp.Update; target: string; arg: Expr; }
+export interface DeleteStmt { op: StOp.Delete; target: string; arg: Expr; }
+/** Re-run a query with N query-string params (pagination / search / filters): `products.refetch(q: x, page: n)`. */
+export interface RefetchStmt { op: StOp.Refetch; target: string; params: { [k: string]: Expr }; }
+/** Explicit non-REST request (escape hatch): `post "shop:/orders" body item`, `delete "shop:/x/{id}"`. */
+export interface RequestStmt { op: StOp.Request; method: string; url: string | Interp; body: Expr | null; }
 export interface IfStmt { op: StOp.If; cond: Expr; then: Stmt[]; else: Stmt[] | null; }
-export type Stmt = PushStmt | SetStmt | ResetStmt | RemoveStmt | IfStmt;
+export type Stmt = PushStmt | SetStmt | ResetStmt | RemoveStmt | CreateStmt | UpdateStmt | DeleteStmt | RefetchStmt | RequestStmt | IfStmt;
 
 
 // ── 6. Entities & validation schema ──────────────────────────────────────────
@@ -193,6 +202,9 @@ export type FamilyFn = (m: string, t: Theme) => string | null;
 
 // ── 8. Nested IR (parser output) ─────────────────────────────────────────────
 
+/** A `class()` entry: a plain look class, or one toggled reactively (`active when isOpen`). */
+export interface ClassCond { name: string; cond: Expr; }
+
 /** A node's props: a named bag of authoring options (no catch-all — every field is declared). */
 export interface NodeProps {
   // positional / textual
@@ -215,7 +227,7 @@ export interface NodeProps {
   where?: string[];
   columns?: string[];
   style?: string[];
-  class?: string[];
+  class?: Array<string | ClassCond>;   // static look classes + reactive toggles (`active when isOpen`)
   inputs?: ArgMap;
   on?: ArgMap;
   // control flow (When/Each)
@@ -246,11 +258,14 @@ export interface IR {
   constraints?: { [entity: string]: EntityConstraints };
   mock?: { [name: string]: Value };              // inline test data
   sources?: { [name: string]: Value };           // real data sources (raw; the plugin reads them as Source)
+  api?: { [name: string]: Value };               // app-wide backend config (base URL + default headers)
   routes?: Route[];
   shell?: IRNode;
   parts?: { [name: string]: PartDef };
   consts?: { [name: string]: Scalar };           // compile-time immutable scalars
   theme?: { [scale: string]: ThemeScale };       // project theme (raw blocks)
+  params?: string[];                             // route params a page declares (`param id`), injected at mount
+  meta?: { [k: string]: string };                // page <head> metadata (title/description → tags + og)
 }
 
 
@@ -278,6 +293,8 @@ export interface Doc {
   nodes: { [id: string]: FlatNode };
   gets?: { [name: string]: Expr };
   effects?: Stmt[][];
+  params?: string[];   // route params declared by the page (`param id`)
+  meta?: { [k: string]: string };   // page <head> metadata (title/description)
 }
 
 
@@ -316,6 +333,7 @@ export interface CompileOpts {
   format?: Fmt;
   theme?: Theme;
   stores?: { [domain: string]: StoreSlice };
+  api?: { [name: string]: Value };   // app-wide backend config (base + default headers) applied to `sources`
 }
 
 /** One screen's resolved compile context — the shared state the DOM half (compile.ts) and the
@@ -332,6 +350,7 @@ export interface CompileCtx {
   queryStates: Set<string>;   // states backed by a query (rich { data, loading, error } signals)
   stores: { [domain: string]: StoreSlice };
   usedStores: Set<string>;    // store domains actually referenced (→ import list)
+  params: Set<string>;        // route params (`param id`) — resolve to a local string injected at mount
   format?: Fmt;
 }
 
@@ -356,8 +375,11 @@ export interface EmitParts {
   projectCss: string;
   data: { [name: string]: Value };
   sources: { [name: string]: Value };
+  api: { [name: string]: Value };
+  meta: { [k: string]: string };
   queryUuids: { [query: string]: string[] };
   stateDecls: string;
+  paramDecls: string;
   actionDecls: string;
   getDecls: string;
   effectDecls: string;
@@ -430,7 +452,7 @@ export interface Signal<T> { get(): T; set(next: T): void; }
 /** An effect's run function, carrying its current dependency set + a disposed flag. */
 export interface EffectRun { (): void; deps: Set<Set<EffectRun>>; disposed: boolean; }
 /** A compiled page/shell module: its scoped CSS + a mount() that builds it into a root element. */
-export interface PageModule { css: string; mount(root: Element): Element; }
+export interface PageModule { css: string; mount(root: Element, params?: { [key: string]: string }): Element; meta?: { [key: string]: string }; }
 /** One route's lazy loader + optional guard/redirect (the hash router consumes a map of these). */
 export interface RouteDef { load(): Promise<PageModule>; guard?: () => boolean; redirect?: string; }
 

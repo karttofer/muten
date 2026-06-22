@@ -14,7 +14,7 @@ import { PRIMITIVES } from '#engine/lang/manifest.js';
 import { Grammar } from '#engine/lang/grammar.js';
 import { Tk, Pn, Kw, Nt, Mod, StOp } from '#engine/shared/vocab.js';
 import type {
-  IR, IRNode, NodeProps, StringPropName, Stmt, IfStmt, Value, Level,
+  IR, IRNode, NodeProps, StringPropName, Stmt, IfStmt, Expr, Value, Level,
   Entity, FieldType, EntityConstraints, FieldConstraint,
   StateDef, Route, PartParam, ArgValue, ArgMap, ThemeScale,
 } from '#engine/shared/types.js';
@@ -46,7 +46,11 @@ export class Parser extends Grammar {
       [Mod.Where, (props: NodeProps) => { props.where = this.parseParenList(() => this.rebuildClause()); }],
       [Mod.Columns, (props: NodeProps) => { props.columns = this.parseParenList(() => this.eat(Tk.Ident).v); }],
       [Mod.Style, (props: NodeProps) => { props.style = this.parseParenList(() => this.parseStyleToken()); }],
-      [Mod.Class, (props: NodeProps) => { props.class = this.parseParenList(() => this.at(Tk.String) ? this.next().v : this.eat(Tk.Ident).v); }], // raw look classes
+      [Mod.Class, (props: NodeProps) => { props.class = this.parseParenList(() => { // raw look classes + `name when cond`
+        const name = this.at(Tk.String) ? this.next().v : this.eat(Tk.Ident).v;
+        if (this.at(Tk.Ident, Kw.When)) { this.next(); return { name, cond: this.parseExpr() }; }
+        return name;
+      }); }],
       [Mod.Alt, (props: NodeProps) => { props.alt = this.parseInterpolation(this.eat(Tk.String).v); }],  // Image a11y/SEO text
       [Mod.Inputs, (props: NodeProps) => { props.inputs = this.parseArgs(); }],   // Custom: inputs(k: value, …)
       [Mod.On, (props: NodeProps) => { props.on = this.parseArgs(); }],           // Custom: on(event: action, …)
@@ -57,6 +61,17 @@ export class Parser extends Grammar {
       [StOp.Set, (target: string): Stmt => ({ op: StOp.Set, target, arg: this.parseExpr() })],
       [StOp.Reset, (target: string): Stmt => ({ op: StOp.Reset, target })],
       [StOp.Remove, (target: string): Stmt => { const param = this.eat(Tk.Ident).v; this.eat(Tk.FatArrow); return { op: StOp.Remove, target, param, pred: this.parseExpr() }; }],
+      [StOp.Create, (target: string): Stmt => ({ op: StOp.Create, target, arg: this.parseExpr() })], // POST to the source
+      [StOp.Update, (target: string): Stmt => ({ op: StOp.Update, target, arg: this.parseExpr() })], // PUT /:id
+      [StOp.Delete, (target: string): Stmt => ({ op: StOp.Delete, target, arg: this.parseExpr() })], // DELETE /:id
+      [StOp.Refetch, (target: string): Stmt => { // refetch a query with N named query params: refetch(q: x, page: n)
+        const params: { [k: string]: Expr } = {};
+        while (!this.at(Tk.Punct, Pn.ParenR)) {
+          const key = this.eat(Tk.Ident).v; this.eat(Tk.Punct, Pn.Colon); params[key] = this.parseExpr();
+          if (this.at(Tk.Punct, Pn.Comma)) this.next();
+        }
+        return { op: StOp.Refetch, target, params };
+      }],
     ]);
   }
 
@@ -75,11 +90,14 @@ export class Parser extends Grammar {
       [Kw.Action, () => this.parseAction(ir)],
       [Kw.Mock, () => this.parseMock(ir)],
       [Kw.Sources, () => this.parseSources(ir)],
+      [Kw.Api, () => this.parseApi(ir)],
+      [Kw.Meta, () => this.parseMeta(ir)],
       [Kw.Routes, () => this.parseRoutes(ir)],
       [Kw.Shell, () => this.parseShell(ir)],                                                   // app chrome + slot
       [Kw.Part, () => this.parsePart(ir)],
       [Kw.Const, () => this.parseConst(ir)],                                                   // compile-time immutable
       [Kw.Theme, () => this.parseTheme(ir)],                                                   // project theme
+      [Kw.Param, () => { this.next(); (ir.params = ir.params || []).push(this.eat(Tk.Ident).v); }], // route param: `param id`
     ]);
     while (!this.at(Tk.Eof)) {
       const tok = this.peek();
@@ -163,11 +181,10 @@ export class Parser extends Grammar {
   private parseAction(ir: IR): void {
     this.eat(Tk.Ident, Kw.Action);
     const name = this.eat(Tk.Ident).v;
-    this.eat(Tk.Ident, Kw.Mutates);
-    const mutates = [this.eat(Tk.Ident).v];
-    while (this.at(Tk.Punct, Pn.Comma)) { this.next(); mutates.push(this.eat(Tk.Ident).v); }
-    this.eat(Tk.LArrow);
-    const input = this.eat(Tk.Ident).v;
+    const mutates: string[] = []; // optional: a pure command (e.g. an explicit `post`) mutates nothing local
+    if (this.at(Tk.Ident, Kw.Mutates)) { this.next(); mutates.push(this.eat(Tk.Ident).v); while (this.at(Tk.Punct, Pn.Comma)) { this.next(); mutates.push(this.eat(Tk.Ident).v); } }
+    let input = '';               // optional input parameter (`<- item`)
+    if (this.at(Tk.LArrow)) { this.next(); input = this.eat(Tk.Ident).v; }
     ir.actions[name] = { mutates, input, body: this.parseActionBody() };
   }
 
@@ -190,8 +207,18 @@ export class Parser extends Grammar {
   }
 
   // a statement: an `if` block, or `target.method(args)` dispatched through the `statements` table.
+  // explicit non-REST request (escape hatch): `post "client:/path" body expr` · `delete "client:/path"`.
+  private parseRequest(): Stmt {
+    const method = this.eat(Tk.Ident).v.toUpperCase();
+    const url = this.parseInterpolation(this.eat(Tk.String).v);
+    let body: Expr | null = null;
+    if (this.at(Tk.Ident, Kw.Body)) { this.next(); body = this.parseExpr(); }
+    return { op: StOp.Request, method, url, body };
+  }
+
   private parseStatement(): Stmt {
     if (this.at(Tk.Ident, Kw.If)) return this.parseIf();
+    if (this.at(Tk.Ident, 'post') || this.at(Tk.Ident, 'put') || this.at(Tk.Ident, 'delete')) return this.parseRequest();
     const target = this.eat(Tk.Ident).v;
     this.eat(Tk.Punct, Pn.Dot);
     const method = this.eat(Tk.Ident).v;
@@ -215,6 +242,22 @@ export class Parser extends Grammar {
     const sources: { [name: string]: Value } = ir.sources || {};
     this.parseEntries((name) => { sources[name] = this.parseValue(); });
     ir.sources = sources;
+  }
+  // app-wide backend config: `api { base: "…" headers: { … } }` (in app.muten). Applied to every `sources`.
+  private parseApi(ir: IR): void {
+    this.eat(Tk.Ident, Kw.Api);
+    const api: { [name: string]: Value } = ir.api || {};
+    this.parseEntries((name) => { api[name] = this.parseValue(); });
+    ir.api = api;
+  }
+  // page <head> metadata: `meta { title "…" description "…" }` → <title>/<meta> tags (og auto-derived).
+  private parseMeta(ir: IR): void {
+    this.eat(Tk.Ident, Kw.Meta);
+    this.eat(Tk.Punct, Pn.BraceL);
+    const meta: { [k: string]: string } = ir.meta || {};
+    while (!this.at(Tk.Punct, Pn.BraceR)) { const key = this.eat(Tk.Ident).v; meta[key] = this.eat(Tk.String).v; }
+    this.eat(Tk.Punct, Pn.BraceR);
+    ir.meta = meta;
   }
 
   // routes { /url -> page [guard [not] store.flag else /redirect] } — the app root (app.muten).
@@ -404,9 +447,9 @@ export class Parser extends Grammar {
   }
 
   // ( item, item, … ) with a caller-supplied item reader (used by style/class/columns/where).
-  private parseParenList(readItem: () => string): string[] {
+  private parseParenList<T>(readItem: () => T): T[] {
     this.eat(Tk.Punct, Pn.ParenL);
-    const items: string[] = [];
+    const items: T[] = [];
     while (!this.at(Tk.Punct, Pn.ParenR)) {
       items.push(readItem());
       if (this.at(Tk.Punct, Pn.Comma)) this.next();
@@ -450,7 +493,8 @@ export class Parser extends Grammar {
     let url = '';
     while (this.at(Tk.Punct, Pn.Slash) && this.locOf(this.peek().pos).line === line) {
       this.next(); url += '/';
-      if (this.at(Tk.Ident)) url += this.eat(Tk.Ident).v;
+      if (this.at(Tk.Punct, Pn.Colon)) { this.next(); url += ':' + this.eat(Tk.Ident).v; } // `:id` param segment
+      else if (this.at(Tk.Ident)) url += this.eat(Tk.Ident).v;
     }
     return url;
   }

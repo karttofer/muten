@@ -42,7 +42,7 @@ export enum Kw {
   Screen = 'screen', Entity = 'entity', State = 'state', Store = 'store',
   Get = 'get', Effect = 'effect', Action = 'action', Mutates = 'mutates',
   Mock = 'mock', Sources = 'sources', Routes = 'routes', Shell = 'shell',
-  Part = 'part', Const = 'const', Theme = 'theme', Query = 'query',
+  Part = 'part', Const = 'const', Theme = 'theme', Query = 'query', Param = 'param', Api = 'api', Body = 'body', Meta = 'meta',
   When = 'when', Each = 'each', As = 'as', If = 'if', Else = 'else',
   Guard = 'guard', Not = 'not', And = 'and', Or = 'or', Contains = 'contains',
   Required = 'required', Min = 'min', Max = 'max',
@@ -63,7 +63,7 @@ export enum Nt {
 }
 
 /** Compile output format. */
-export enum Fmt { Module = 'module', Store = 'store', Html = 'html' }
+export enum Fmt { Module = 'module', Store = 'store', Html = 'html', Ssr = 'ssr' }
 
 /** Editable form-field kinds (how a Form renders an entity field). */
 export enum Fk { Text = 'text', Email = 'email', Enum = 'enum' }
@@ -81,7 +81,7 @@ export enum UOp { Not = 'not' }
 export enum Ek { Lit = 'lit', Ref = 'ref', Un = 'un', Bin = 'bin', Tern = 'tern', Interp = 'interp' }
 
 /** Action-body statement ops (discriminants) — mutations + the `if` branch. */
-export enum StOp { Push = 'push', Set = 'set', Reset = 'reset', Remove = 'remove', If = 'if' }
+export enum StOp { Push = 'push', Set = 'set', Reset = 'reset', Remove = 'remove', Create = 'create', Update = 'update', Delete = 'delete', Refetch = 'refetch', Request = 'request', If = 'if' }
 
 /** Node modifiers (post-primitive). */
 export enum Mod {

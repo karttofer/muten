@@ -4,7 +4,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parse } from '#engine/lang/parse.js';
-import type { RouteEntry } from '#engine/shared/types.js';
+import type { RouteEntry, Value } from '#engine/shared/types.js';
 
 export function readRoutes(appRoot: string): RouteEntry[] {
   const rel = (p: string) => relative(appRoot, p);
@@ -24,4 +24,12 @@ export function readRoutes(appRoot: string): RouteEntry[] {
     if (!existsSync(r.screenPath)) throw new Error(`route /${r.route} -> ${r.page}: page not found at ${rel(r.screenPath)}`);
   }
   return routes;
+}
+
+// The app-wide backend config from app.muten `api { base, headers }` ({} if none) — applied to every `sources`.
+export function readApi(appRoot: string): { [name: string]: Value } {
+  const root = join(appRoot, 'src', 'app.muten');
+  if (!existsSync(root)) return {};
+  try { return parse(readFileSync(root, 'utf8')).api || {}; }
+  catch { return {}; }
 }

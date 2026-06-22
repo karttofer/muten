@@ -32,6 +32,8 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   const stateKeys = new Set(Object.keys(doc.state || {}));
   const storeDomains = new Set(ctx.stores || []); // app-global store slices (cart.total, cart.add)
   const constNames = new Set(Object.keys(doc.consts || {})); // compile-time constants
+  const paramNames = new Set(doc.params || []);              // route params (`param id`)
+  const actionNames = new Set(Object.keys(doc.actions || {})); // for `action.pending` / `action.error` refs
   const nodes = doc.nodes || {};
 
   // ── state types: a `list` must declare its element (the north star — always know what's inside) ──
@@ -62,7 +64,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   const checkExpr = (expr: Expr, node: FlatNode, scope: Set<string>): void => {
     for (const ref of collectRefs(expr)) {
       const head = ref.split('.')[0];
-      if (scope.has(head) || stateKeys.has(head) || storeDomains.has(head) || constNames.has(head)) continue;
+      if (scope.has(head) || stateKeys.has(head) || storeDomains.has(head) || constNames.has(head) || paramNames.has(head) || actionNames.has(head)) continue;
       const near = closest(head, [...stateKeys, ...scope]);
       D.push(diag('unknown-ref', `"${head}" is not a known state or item variable here`, { loc: node.loc, suggestion: near }));
     }
@@ -145,7 +147,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       if (!KNOWN_OPS.has(st.op)) {
         D.push(diag('unknown-op', `action "${name}" uses unknown op "${st.op}"`, { suggestion: closest(st.op, [...KNOWN_OPS]) }));
       }
-      if (st.target && !declared.has(st.target)) {
+      if ('target' in st && st.target && !declared.has(st.target)) {
         D.push(diag('undeclared-mutation', `action "${name}" mutates "${st.target}" but only declares mutates(${[...declared].join(', ') || '∅'})`, { suggestion: closest(st.target, [...declared]) }));
       }
     };

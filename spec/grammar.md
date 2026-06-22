@@ -25,8 +25,8 @@ A file is a sequence of top-level declarations, in any order:
 
 ```
 file        = declaration* ;
-declaration = screen | entity | state | store | get | effect | const | theme
-            | action | mock | sources | routes | shell | part | node ;
+declaration = screen | entity | state | store | get | effect | const | theme | param
+            | action | mock | sources | api | meta | routes | shell | part | node ;
 ```
 
 - A **page** (`src/pages/<route>/<route>.muten`): `screen` + state/entity/action/const/… + one **root node** (the tree).
@@ -51,6 +51,7 @@ binding  = ident "=" ( "query" ident | value ) ":" type ;   # query → async { 
 get      = "get" ident "=" expr ;                     # .store derived/memoized value
 effect   = "effect" actionBody ;                      # .store reactive side-effect
 const    = "const" ident "=" scalar ;                 # compile-time immutable (scalars only)
+param    = "param" ident ;                            # a route param the page reads (for /x/:id) — read-only string
 
 action     = "action" ident "mutates" ident ( "," ident )* "<-" ident actionBody ;
 actionBody = "{" statement* "}" ;
@@ -58,10 +59,14 @@ statement  = ident "." "push"  "(" expr ")"
            | ident "." "set"   "(" expr ")"
            | ident "." "reset" "(" ")"
            | ident "." "remove" "(" ident "=>" expr ")"
+           | ident "." ( "create" | "update" | "delete" ) "(" expr ")"  # server CRUD on a source-backed list
+           | ident "." "refetch" "(" ( ident ":" expr ( "," ident ":" expr )* )? ")"  # re-run a query with N params
            | "if" expr actionBody ( "else" actionBody )? ;
 
 mock     = "mock"    "{" ( ident ":" value )* "}" ;
-sources  = "sources" "{" ( ident ":" value )* "}" ;   # value = "url"  or  { url: "…", at: "…" }
+sources  = "sources" "{" ( ident ":" value )* "}" ;   # value = "url"  or  { url, method?, headers?, body?, at? }
+api      = "api"     "{" ( ident ":" value )* "}" ;   # app.muten: { base?, headers? }  OR named { shop: {…}, cms: {…} } picked per source by { api: "shop" }
+meta     = "meta"    "{" ( ident string )* "}" ;      # page <head>: title, description (og:* auto-derived → <title>/<meta>)
 value    = scalar | array | object ;
 scalar   = string | number | "true" | "false" | "null" | ident ;   # a bare ident = an enum value
 array    = "[" ( value ( "," value )* )? "]" ;
@@ -69,7 +74,7 @@ object   = "{" ( ( ident | string ) ":" value ( "," … )* )? "}" ;
 
 routes   = "routes" "{" route* "}" ;                  # one route per line
 route    = path "->" ident ( "guard" "not"? dotted "else" path )? ;
-path     = ( "/" ident? )+ ;                          # /  ·  /cart  ·  /
+path     = ( "/" ( ident | ":" ident )? )+ ;          # /  ·  /cart  ·  /product/:id   (:id = a route param)
 
 shell    = "shell" "{" node* "}" ;                    # persistent chrome; must contain a `slot`
 theme    = "theme" "{" ( ident "{" ( ident string )* "}" )* "}" ;   # space { md "16px" } …
@@ -117,9 +122,10 @@ modifier  = "bind" ( ref | dotted )                   # bind @draft  ·  bind ca
           | "where"   "(" clause* ")"                 # where(role == admin, name contains @q)
           | "columns" "(" ident* ")"
           | "style"   "(" token* ")"                  # analyzable layout/typography tokens
-          | "class"   "(" ( string | ident )* ")"     # raw look classes (your CSS / Tailwind)
+          | "class"   "(" ( (string|ident) ("when" expr)? )* ")"  # look classes; "name when cond" = reactive toggle
           | "alt" string                              # Image (required, a11y/SEO)
-          | "inputs" "(" arg* ")" | "on" "(" arg* ")" ;   # Custom
+          | "inputs" "(" arg* ")"                      # Custom inputs
+          | "on" "(" arg* ")" ;                        # events on ANY element: on(keydown: action, …)
 block     = "{" node* "}" ;
 ```
 

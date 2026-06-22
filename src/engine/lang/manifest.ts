@@ -124,7 +124,7 @@ export const MODIFIER_DOCS = {
   on: 'Custom component events wired to actions: `on(select: pick)`.',
 };
 
-export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'routes', 'shell', 'guard', 'else', 'part', 'query', 'if', 'when', 'each', 'as', 'and', 'or', 'not', 'contains'];
+export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'and', 'or', 'not', 'contains'];
 export const KEYWORD_DOCS = {
   screen: 'Declares the screen name: `screen users_dashboard`.',
   entity: 'Declares a data shape + validation: `entity User { name text required  email email required  password text min:8 }` (implicit uuid id). Constraints: `required`, `min:N`, `max:N`.',
@@ -138,11 +138,17 @@ export const KEYWORD_DOCS = {
   mutates: 'Lists the state an action may mutate — the linter enforces it.',
   mock: 'Inline mock data for queries: `mock { listUsers: [ { name: "Ana", role: admin } ] }`.',
   sources: 'Real data sources for queries: `sources { listChars: { url: "https://api...", at: "results" } }`.',
+  api: 'App-wide backend config in app.muten: `api { base: "https://…" headers: { … } }`. A relative `sources` url is joined to `base`; headers merge (the source wins).',
+  meta: 'Page <head> metadata: `meta { title "…" description "…" }` → `<title>` + `<meta>` tags (og:* auto-derived). Applied on navigation.',
+  post: 'Explicit non-REST request in an action: `post "shop:/orders" body item` (escape hatch when CRUD ops do not fit).',
+  put: 'Explicit non-REST request in an action: `put "shop:/orders/{id}" body item`.',
+  body: 'The JSON body of an explicit `post`/`put` request: `post "shop:/x" body item`.',
   routes: 'App root (app.muten): maps URLs to pages, `routes { /url -> page }`. The single source of truth the AI reads.',
   shell: 'Persistent app chrome in app.muten: `shell { Header { … }  slot  Footer { … } }`. Wraps every route; `slot` is where the active Page (<main>) mounts.',
   guard: 'Route guard in app.muten: `routes { /cart -> cart guard auth.loggedIn else /login }`. If the store boolean is false on navigation, redirect. Guest-only page: `guard not auth.loggedIn else /catalog`.',
   else: 'The redirect target of a route `guard`: `guard auth.loggedIn else /login`.',
   part: 'Reusable composition: `part Card(item: Item, onPick: action) { ... }`. Pass OBJECTS (`$item.field`) and ACTION callbacks (`-> $onPick(...)`). Inlined at build time.',
+  param: 'Declares a route param read from the URL: `param id` for a route `/x/:id`. Usable in interpolation/`when`/expressions like a read-only string.',
   query: 'An async data source. The state exposes `.loading`, `.error` and `.data`.',
   if: 'Conditional INSIDE an action body: `if <expr> { … } else { … }` — the only branching in actions (toggles, validation, add-or-remove).',
   when: 'Conditional render: `when <expr> { ... }`.',
@@ -154,12 +160,16 @@ export const KEYWORD_DOCS = {
   contains: 'Case-insensitive substring match: `name contains @q`.',
 };
 
-export const ACTION_OPS = ['push', 'remove', 'reset', 'set'];
+export const ACTION_OPS = ['push', 'remove', 'reset', 'set', 'create', 'update', 'delete', 'refetch'];
 export const ACTION_OP_DOCS = {
   push: 'Append to a list state: `users.push(draft)` (auto-fills uuid fields).',
-  remove: 'Remove matching items: `users.remove(u => u.id == id)`.',
+  remove: 'Remove matching items locally: `users.remove(u => u.id == id)`.',
   reset: 'Reset a state to its declared initial: `draft.reset()`.',
   set: 'Set a state value: `rating.set(v)`.',
+  create: 'POST an item to a source-backed list, then append the result: `orders.create(draft)`.',
+  update: 'PUT an item (by id) to a source-backed list, then replace it: `orders.update(order)`.',
+  delete: 'DELETE an item (by id) from a source-backed list, then drop it: `orders.delete(order)`.',
+  refetch: 'Re-run a query with N query-string params (paginate / search / filter): `products.refetch(q: term, page: n)`.',
 };
 
 export const PRIMITIVE_NAMES = Object.keys(PRIMITIVES);

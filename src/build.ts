@@ -3,20 +3,15 @@
 
 import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { Nt } from '#engine/shared/vocab.js';
-import { readRoutes } from '#engine/project/routes.js';
+import { Nt, Fmt } from '#engine/shared/vocab.js';
+import { readRoutes, readApi } from '#engine/project/routes.js';
+import { renderSsrBody, fetchSources } from '#engine/project/ssr.js';
+import { sourceRequest } from '#engine/shared/source.js';
 import { load, loadAllParts } from '#engine/project/load.js';
 import { validate } from '#engine/ir/validate.js';
 import { compile } from '#engine/compile/compile.js';
 import { formatDiagnostic, ParseError } from '#engine/shared/diagnostics.js';
-import type { Diagnostic, AppMap, Value } from '#engine/shared/types.js';
-
-// a source descriptor's URL, for the app graph: a bare URL string, or the `url` of a { url, at } object.
-const sourceUrl = (v: Value): string => {
-  if (typeof v === 'string') return v;
-  if (v && typeof v === 'object' && !Array.isArray(v) && typeof v.url === 'string') return v.url;
-  return '';
-};
+import type { Diagnostic, AppMap } from '#engine/shared/types.js';
 
 export async function buildApp(appRoot: string, outDir = join(appRoot, 'dist')): Promise<{ routes: string[]; outDir: string }> {
   const rel = (p: string) => relative(appRoot, p);
@@ -26,6 +21,7 @@ export async function buildApp(appRoot: string, outDir = join(appRoot, 'dist')):
   if (Object.keys(sharedParts).length) console.log(`Parts: ${Object.keys(sharedParts).join(', ')}`);
 
   const pages = readRoutes(appRoot); // throws on a missing/duplicate/dangling route
+  const api = readApi(appRoot);      // app-wide backend config (base + headers) for every page's sources
   console.log(`Host app: ${appRoot}`);
   console.log(`Pages: ${pages.map((p) => '/' + p.route).join(', ')}\n`);
 
@@ -34,6 +30,7 @@ export async function buildApp(appRoot: string, outDir = join(appRoot, 'dist')):
   const appMap: AppMap = { app: appRoot.split(/[\\/]/).pop() || '', parts: Object.keys(sharedParts), routes: {} };
 
   for (const page of pages) {
+    if (page.route.includes(':')) { console.log(`• /${page.route} — skipped (route params run in the SPA runtime, not the static build)`); continue; }
     let loaded;
     try {
       loaded = await load(page.screenPath, sharedParts); // parse + compose + flatten + data + styles
@@ -57,17 +54,32 @@ export async function buildApp(appRoot: string, outDir = join(appRoot, 'dist')):
       components[name] = readFileSync(path, 'utf8');
     }
 
+    // A static page already comes out as zero-JS HTML. A reactive page comes out as a CSR shell (empty
+    // #app + script); pre-render its content by executing it against the build-time DOM and injecting the
+    // result, so crawlers/first-paint get real markup. On any failure (stores, exotic Custom) keep the shell.
+    const csr = compile(doc, data, styles.css, components, sources, { api });
+    let html = csr, ssrd = false;
+    if (csr.includes('<div id="app"></div>')) {
+      try {
+        // bake remote sources into the build-time data so source-backed lists pre-render too (not just mock)
+        const ssrData = Object.keys(sources).length ? { ...data, ...await fetchSources(sources, api) } : data;
+        const body = renderSsrBody(compile(doc, ssrData, styles.css, components, sources, { format: Fmt.Ssr, api }));
+        html = csr.replace('<div id="app"></div>', `<div id="app">${body}</div>`);
+        ssrd = true;
+      } catch { /* keep the CSR shell — the client renders it */ }
+    }
+
     const pageOut = join(outDir, page.route);
     mkdirSync(pageOut, { recursive: true });
-    writeFileSync(join(pageOut, 'index.html'), compile(doc, data, styles.css, components, sources));
-    console.log(`✓ /${page.route}  →  ${rel(join(pageOut, 'index.html'))}  (${Object.keys(doc.nodes).length} nodes${styles.from ? ', + ' + styles.from : ''})`);
+    writeFileSync(join(pageOut, 'index.html'), html);
+    console.log(`✓ /${page.route}  →  ${rel(join(pageOut, 'index.html'))}  (${Object.keys(doc.nodes).length} nodes${ssrd ? ', SSR' : csr.includes('<script') ? ', CSR' : ', static'}${styles.from ? ', + ' + styles.from : ''})`);
     built.push(page.route);
 
     appMap.routes['/' + page.route] = {
       file: rel(page.screenPath),
       models: Object.keys(doc.entities),
       state: Object.fromEntries(Object.entries(doc.state).map(([name, def]) => [name, typeof def.source === 'string' ? def.source : (def.initial ?? null)])),
-      sources: Object.fromEntries(Object.entries(sources).map(([name, src]) => [name, sourceUrl(src)])),
+      sources: Object.fromEntries(Object.entries(sources).map(([name, src]) => [name, sourceRequest(src).url])),
     };
   }
 

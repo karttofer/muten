@@ -9,6 +9,22 @@ npm create muten@latest my-app   # scaffold a new app (cross-platform: Windows +
 cd my-app && npm install && npm run dev
 ```
 
+## Capabilities
+
+- **UI** — declarative primitives (layout, text, forms, tables, links), `when`/`each` control flow,
+  `style()` layout tokens + `class()` look (toggle reactively: `class(active when isOpen)`), events on
+  any element (`on(keydown: act)`).
+- **State** — local `state`, app-global `store`, derived `get`, `action`s with `if/else`; fine-grained signals.
+- **Data** — `query` states backed by `sources` (full HTTP: method, headers, body, nested `at`); one `api`
+  block for base URL + auth (named clients for several backends); CRUD writes (`create`/`update`/`delete` —
+  optimistic, with `.pending`/`.error`); `refetch(q: …, page: …)` for search/pagination; a `post`/`put`/`delete`
+  escape for non-REST APIs.
+- **Routing** — real-path URLs, params (`/product/:id` → `param id`), guards, a `/404` catch-all.
+- **SEO / SSR** — `muten build` pre-renders every route to real HTML (static pages ship zero JS; data-driven
+  pages are fetched at build), with per-page `meta { title … description … }` (`og:*` auto-derived).
+- **AI-native** — `lint == build`, one source of truth per concept, and the full language reference ships
+  inside every scaffolded app under `.claude/` (an AGENTS guide + a Claude skill).
+
 ## The app, by convention
 
 ```
