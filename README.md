@@ -1,5 +1,6 @@
 
-<img width="157" height="157" alt="Group 21" src="https://github.com/user-attachments/assets/fe9a02e6-483d-4788-9286-142c1ddb7057" /> </br>
+<img width="157" height="157" alt="Group 21" src="https://github.com/user-attachments/assets/fe9a02e6-483d-4788-9286-142c1ddb7057" /> 
+<br/>
 An **AI-first** frontend framework. You write `.muten` files; muten compiles them to vanilla JS
 with fine-grained signals — **no virtual DOM, no framework runtime to ship**. The language is small,
 semantic and analyzable on purpose: an AI (or a person) can **locate and mutate** an app cheaply.
@@ -8,6 +9,20 @@ semantic and analyzable on purpose: an AI (or a person) can **locate and mutate*
 npm create muten@latest my-app   # scaffold a new app (cross-platform: Windows + macOS)
 cd my-app && npm install && npm run dev
 ```
+
+## Why muten (the moat, measured)
+
+For an AI the cost of code is **context + mistakes + edit-radius** — muten is built to cut all three. The
+reproducible benchmark in [`playground/`](../playground) (same app in muten / React / Vue / Svelte) shows:
+
+- **Smaller to read & ship** — ~447 code tokens vs ~562 (Svelte), and a **~2.6 KB gzip** runtime — **7–28×
+  less JS** than the React/Vue/Svelte builds (a static page ships *zero*).
+- **A deterministic oracle** — `muten check --json` catches the typical mistakes (unknown state/action/part,
+  bad style token, illegal mutation) at compile time, in ms, no browser. The *bounded* surface is why it can.
+- **The whole app in ~80 tokens** — `app.map.json` is the index an agent reads first, instead of grepping a tree.
+- **Tiny edit radius** — adding a feature touches a few lines in one file, not a component graph.
+
+That's the trade: a small, analyzable language an AI can hold in its head — not a general-purpose one it can't.
 
 ## Capabilities
 
@@ -22,8 +37,36 @@ cd my-app && npm install && npm run dev
 - **Routing** — real-path URLs, params (`/product/:id` → `param id`), guards, a `/404` catch-all.
 - **SEO / SSR** — `muten build` pre-renders every route to real HTML (static pages ship zero JS; data-driven
   pages are fetched at build), with per-page `meta { title … description … }` (`og:*` auto-derived).
+- **Interop, lowest-tier first** — style native HTML + CSS libs with `class()`; mount **vanilla JS** libs
+  (charts, maps, date-pickers) via `Custom`; pull JS logic into expressions with `use fmt from "./lib.ts"`;
+  and only when you need a real **Svelte/React** component (e.g. shadcn) reach for an **island**
+  (`use X from "react:./X.jsx"` — code-split, lazy `client:visible`). See *Three tiers* below.
 - **AI-native** — `lint == build`, one source of truth per concept, and the full language reference ships
   inside every scaffolded app under `.claude/` (an AGENTS guide + a Claude skill).
+
+## What a muten app can do — three tiers
+
+muten the *language* stays tiny on purpose; a muten *app* reaches the whole web platform through bounded,
+analyzable escapes. Reach for the **lowest tier that works**:
+
+**1 · Pure muten** — the declarative 80%, zero extra deps: pages + routing (params, guards, shell, `/404`) ·
+`state`/`store`/`get` signals · `action`s with optimistic CRUD · `query` over REST `sources` (`refetch`,
+multi-backend) · `Form` from an entity (with validation) · `DataTable`, `when`/`each`, reactive
+`class(when …)`, `on(event: action)` · SSG + SEO. → a real **CRUD / SaaS / catalog / dashboard / content**
+app is *100% muten*.
+
+**2 · muten + the platform** — the web, *no framework runtime*: native HTML (`<input type="date">`,
+`<dialog>`, `<details>`) styled with `class()` · CSS component libs (Tailwind, DaisyUI) · **vanilla JS via
+`Custom`** (charts → chart.js, maps → Leaflet, date-picker → flatpickr, rich-text → Quill, drag-drop →
+SortableJS, grids → Tabulator) · web components · `use fmt from "./lib.ts"` for any JS logic (zod, date-fns).
+→ almost every "hard widget" lands here, **without React**.
+
+**3 · Svelte / React island** — only when the component *is* a framework component (e.g. **shadcn/ui**, a
+React-only lib) with no native/vanilla equivalent. Ships that framework's runtime (lazy, code-split via
+`client:visible`); props ↓ + events ↑ wire it to muten state. The narrow last resort, not the default.
+
+> "Not expressible in pure muten" usually means **tier 2 (platform)**, rarely **tier 3 (React)** — and every
+> escape is *bounded* (the oracle still checks the border), so the language never grows into a UI kit.
 
 ## The app, by convention
 
@@ -117,3 +160,58 @@ file-level conventions (≤500 lines, honest types, data-table dispatch, no magi
 muten imposes no theme. A page lays itself out with `style(…)` tokens (analyzable, resolved against
 `theme.muten`) and skins itself via `class("…")` (your CSS / Tailwind / anything). For behavior the
 primitives can't express, drop to a `Custom` component (`src/components/<Name>.js`).
+
+## Islands — Svelte & React
+
+When a page needs a genuinely interactive widget or a framework UI lib muten can't express, mount a real
+Svelte/React component as an **island**. The `svelte:` / `react:` prefix on `use … from` is the only marker;
+the component file is plain Svelte/React and owns its own tooling.
+
+```
+screen home
+
+use Counter from "svelte:./Counter.svelte"   # a Svelte island
+use Likes   from "react:./Likes.jsx"          # a React island
+
+state { total = 10 : number }
+action setTotal mutates total <- n { total.set(n) }
+
+Page style(padding.xl, gap.md) {
+  Counter(start: @total, onChange: setTotal)               # props ↓ as signals, events ↑ to actions
+  Likes(start: @total, onLike: setTotal) client:visible    # code-split, hydrated when scrolled into view
+  Text "muten state ← islands: {total}"
+}
+```
+
+`prop: @state` sends a value **down** (a React island re-renders when the signal changes; Svelte mounts once);
+`onX: action` sends a callback that fires a muten action — that's how an island writes **back** to muten state.
+No `client:` directive = hydrate on load. Add the framework's Vite plugin next to `muten()`:
+
+```js
+// vite.config.mjs
+import muten from '@muten/core/vite-plugin-muten.js';
+import { svelte } from '@sveltejs/vite-plugin-svelte';
+import react from '@vitejs/plugin-react';
+export default { plugins: [muten(), svelte(), react()] };
+```
+
+## Status & roadmap (honest)
+
+**Pre-1.0 — the core is solid, the edges are young.** Build real apps with it; don't bet a critical
+production system on it yet (small ecosystem, one maintainer, not yet battle-tested).
+
+**Solid today:** the language + compiler, the `check` / `build` / `map` CLI + oracle, the Vite plugin + dev
+server + HMR, the VS Code extension (live-lint + autocomplete), Svelte & React islands, the reproducible benchmark.
+
+**Experimental:** full island **SSR** — `muten build` server-renders an island's HTML (first paint + SEO),
+but client hydration of that island still needs its framework bundled (pair the SSG HTML with the Vite client build).
+
+**Next, toward 1.0:**
+- richer `Form` field types (`date` · `number` · `select` · `bool` · `textarea` · …) — completes the
+  entity→form model, so more is pure-muten with *no* library.
+- bounded aggregates in expressions (`sum` · `count`) — e.g. a cart total without an escape.
+- keyed `each` (large-list perf); a live `source` (SSE / websocket) for real-time.
+
+**By design (the moat, not a bug):** muten is declarative + bounded — no loops / `map` / `reduce` in the DSL
+(use a `use` JS function), no widget primitives (use tier 2 / 3). The ceiling is what keeps it small and
+analyzable; closing it would just make another general-purpose framework.
