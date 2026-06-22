@@ -148,6 +148,13 @@ export class Grammar {
     const literal = LITERALS.get(name);
     if (literal !== undefined) return { kind: Ek.Lit, value: literal }; // true | false | null
     while (this.at(Tk.Punct, Pn.Dot)) { this.next(); name += '.' + this.eat(Tk.Ident).v; } // user.name, cart.total
+    if (this.at(Tk.Punct, Pn.ParenL)) {                       // a call: fmt(a, b) → a use'd function
+      this.next();
+      const args: Expr[] = [];
+      while (!this.at(Tk.Punct, Pn.ParenR)) { args.push(this.ternary()); if (this.at(Tk.Punct, Pn.Comma)) this.next(); }
+      this.eat(Tk.Punct, Pn.ParenR);
+      return { kind: Ek.Call, fn: name, args };
+    }
     return { kind: Ek.Ref, name };
   }
 

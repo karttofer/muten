@@ -12,9 +12,8 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { parse } from '#engine/lang/parse.js';
-import { toDoc } from '#engine/ir/flatten.js';
 import { resolveStyles } from '#engine/project/styles.js';
-import { compose } from '#engine/ir/compose.js';
+import { composeDoc } from '#engine/ir/compose.js';
 import type { PartDef, Value, LoadResult, IR } from '#engine/shared/types.js';
 
 type Parts = { [name: string]: PartDef };
@@ -76,21 +75,11 @@ export async function load(screenPath: string, sharedParts: Parts = {}): Promise
   for (const [name, def] of Object.entries(ir.parts || {})) inlineParts[name] = { ...def, state: {}, entities: {}, mock: {}, css: '' };
   const parts: Parts = { ...sharedParts, ...localParts, ...inlineParts };  // local overrides shared
 
-  const { tree, used } = compose(ir.tree, parts);                          // inline parts -> flat tree
+  const { doc, used } = composeDoc(ir, parts); // inline parts + hoist entity/state → flat doc (THE one builder)
 
-  // hoist: the USED parts contribute entity/state/mock to the page
-  const entities = { ...ir.entities };
-  const state = { ...ir.state };
+  // hoist the USED parts' mock data too, for the page's build-time data
   let mock: { [name: string]: Value } = { ...(ir.mock || {}) };
-  for (const name of used) {
-    const p = parts[name];
-    if (!p) continue;
-    Object.assign(entities, p.entities);
-    Object.assign(state, p.state);
-    mock = { ...mock, ...p.mock };
-  }
-
-  const doc = toDoc({ screen: ir.screen, entities, state, actions: ir.actions, consts: ir.consts, constraints: ir.constraints, tree });
+  for (const name of used) { const p = parts[name]; if (p) mock = { ...mock, ...p.mock }; }
 
   const dataPath = screenPath.replace(/\.muten$/, '.data.json');
   const fileData: { [name: string]: Value } = existsSync(dataPath) ? JSON.parse(readFileSync(dataPath, 'utf8')) : {};

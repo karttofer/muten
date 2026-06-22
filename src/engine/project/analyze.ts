@@ -11,8 +11,7 @@
 import fs from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parse } from '#engine/lang/parse.js';
-import { toDoc } from '#engine/ir/flatten.js';
-import { compose } from '#engine/ir/compose.js';
+import { composeDoc } from '#engine/ir/compose.js';
 import { validate } from '#engine/ir/validate.js';
 import { closest, diag, ParseError } from '#engine/shared/diagnostics.js';
 import { PRIMITIVE_NAMES } from '#engine/lang/manifest.js';
@@ -132,11 +131,7 @@ export function analyze(filePath: string, text: string): ValidateResult {
     return validate({ screen: 'store', state: ir.state || {}, actions: ir.actions || {}, entities: ir.entities || {}, gets: ir.gets || {}, consts: {}, constraints: {}, rootId: undefined, nodes: {} }, { kind: 'store' });
   }
   const parts = projectParts(filePath);
-  const { tree, used } = compose(ir.tree, parts); // resolve parts; typos survive and get flagged
-  const entities = { ...ir.entities };
-  const state = { ...ir.state };
-  for (const n of used) { const p = parts[n]; if (p) { Object.assign(entities, p.entities); Object.assign(state, p.state); } }
-  const doc = toDoc({ screen: ir.screen, entities, state, actions: ir.actions, consts: ir.consts, constraints: ir.constraints, tree });
+  const { doc } = composeDoc(ir, parts); // resolve parts (typos survive → flagged) + hoist state → THE one doc builder
   return validate(doc, { parts: Object.keys(parts), stores: projectStores(filePath), theme: projectTheme(filePath) });
 }
 

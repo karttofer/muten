@@ -43,6 +43,7 @@ export enum Kw {
   Get = 'get', Effect = 'effect', Action = 'action', Mutates = 'mutates',
   Mock = 'mock', Sources = 'sources', Routes = 'routes', Shell = 'shell',
   Part = 'part', Const = 'const', Theme = 'theme', Query = 'query', Param = 'param', Api = 'api', Body = 'body', Meta = 'meta',
+  Use = 'use', From = 'from', Client = 'client',
   When = 'when', Each = 'each', As = 'as', If = 'if', Else = 'else',
   Guard = 'guard', Not = 'not', And = 'and', Or = 'or', Contains = 'contains',
   Required = 'required', Min = 'min', Max = 'max',
@@ -78,7 +79,7 @@ export enum BOp {
 export enum UOp { Not = 'not' }
 
 /** Expression AST node kinds (discriminants). */
-export enum Ek { Lit = 'lit', Ref = 'ref', Un = 'un', Bin = 'bin', Tern = 'tern', Interp = 'interp' }
+export enum Ek { Lit = 'lit', Ref = 'ref', Un = 'un', Bin = 'bin', Tern = 'tern', Interp = 'interp', Call = 'call' }
 
 /** Action-body statement ops (discriminants) — mutations + the `if` branch. */
 export enum StOp { Push = 'push', Set = 'set', Reset = 'reset', Remove = 'remove', Create = 'create', Update = 'update', Delete = 'delete', Refetch = 'refetch', Request = 'request', If = 'if' }

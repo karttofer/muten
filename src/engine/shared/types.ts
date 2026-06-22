@@ -80,7 +80,12 @@ export interface RefExpr { kind: Ek.Ref; name: string; }
 export interface UnExpr { kind: Ek.Un; op: UOp; operand: Expr; }
 export interface BinExpr { kind: Ek.Bin; op: BOp; left: Expr; right: Expr; }
 export interface TernExpr { kind: Ek.Tern; cond: Expr; then: Expr; else: Expr; }
-export type Expr = LitExpr | RefExpr | UnExpr | BinExpr | TernExpr;
+/** A call to a `use`'d JS function: `fmt(date, "…")`. `fn` is the imported name; never a muten primitive. */
+export interface CallExpr { kind: Ek.Call; fn: string; args: Expr[]; }
+export type Expr = LitExpr | RefExpr | UnExpr | BinExpr | TernExpr | CallExpr;
+
+/** A `use a, b from "./lib.ts"` — named JS functions muten may call. The seam to the JS ecosystem. */
+export interface ImportDef { names: string[]; from: string; }
 
 /** "Hi, {user.name}" → a list of plain strings interleaved with embedded expressions. */
 export interface Interp {
@@ -219,6 +224,7 @@ export interface NodeProps {
   component?: string;
   data?: string;
   to?: string | Interp;  // a route path; interpolated (`/product/{p.id}`) for dynamic navigation
+  hydrate?: string;      // island hydration directive: `client:visible` | `client:idle` (else: on load)
   action?: string;
   arg?: Expr;
   bind?: string;
@@ -266,6 +272,7 @@ export interface IR {
   theme?: { [scale: string]: ThemeScale };       // project theme (raw blocks)
   params?: string[];                             // route params a page declares (`param id`), injected at mount
   meta?: { [k: string]: string };                // page <head> metadata (title/description → tags + og)
+  imports?: ImportDef[];                         // `use a, b from "./lib.ts"` — named JS functions to call
 }
 
 
@@ -295,6 +302,7 @@ export interface Doc {
   effects?: Stmt[][];
   params?: string[];   // route params declared by the page (`param id`)
   meta?: { [k: string]: string };   // page <head> metadata (title/description)
+  imports?: ImportDef[];   // `use a, b from "./lib.ts"` — named JS functions the page may call
 }
 
 
@@ -385,6 +393,8 @@ export interface EmitParts {
   effectDecls: string;
   componentDecls: string;
   storeImports: string;
+  externImports: string;   // `import { fmt } from "./lib.ts"` for each logic-function `use` declaration
+  islandImports: string;   // adapter import + component import + mount glue for each `use X from "svelte:…"`
   renderBody: string;
   staticHtml: string;
   hasSlot: boolean;

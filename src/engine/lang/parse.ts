@@ -98,6 +98,13 @@ export class Parser extends Grammar {
       [Kw.Const, () => this.parseConst(ir)],                                                   // compile-time immutable
       [Kw.Theme, () => this.parseTheme(ir)],                                                   // project theme
       [Kw.Param, () => { this.next(); (ir.params = ir.params || []).push(this.eat(Tk.Ident).v); }], // route param: `param id`
+      [Kw.Use, () => { // `use a, b from "./lib.ts"` — named JS functions muten may call
+        this.next();
+        const names = [this.eat(Tk.Ident).v];
+        while (this.at(Tk.Punct, Pn.Comma)) { this.next(); names.push(this.eat(Tk.Ident).v); }
+        this.eat(Tk.Ident, Kw.From);
+        (ir.imports = ir.imports || []).push({ names, from: this.eat(Tk.String).v });
+      }],
     ]);
     while (!this.at(Tk.Eof)) {
       const tok = this.peek();
@@ -365,7 +372,11 @@ export class Parser extends Grammar {
     const head = this.eat(Tk.Ident);
     const type = head.v;
     const loc = this.locOf(head.pos);
-    if (this.at(Tk.Punct, Pn.ParenL)) return { type, args: this.parseArgs(), loc }; // part instance: Name(arg: value)
+    if (this.at(Tk.Punct, Pn.ParenL)) { // part instance / island: Name(arg: value) [client:visible]
+      const args = this.parseArgs();
+      if (this.at(Tk.Ident, Kw.Client)) { this.next(); this.eat(Tk.Punct, Pn.Colon); return { type, args, props: { hydrate: this.eat(Tk.Ident).v }, loc }; }
+      return { type, args, loc };
+    }
 
     const props: NodeProps = {};
     const children: IRNode[] = [];

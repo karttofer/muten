@@ -6,7 +6,8 @@
 // value shape (prop / expression / interpolation / arg) — honestly typed, no generic any.
 
 import { Ek } from '#engine/shared/vocab.js';
-import type { IRNode, NodeProps, StringPropValue, Expr, Interp, ArgMap, ArgValue, PartDef } from '#engine/shared/types.js';
+import { toDoc } from '#engine/ir/flatten.js';
+import type { IR, Doc, IRNode, NodeProps, StringPropValue, Expr, Interp, ArgMap, ArgValue, PartDef } from '#engine/shared/types.js';
 
 type Parts = { [name: string]: PartDef };
 
@@ -14,6 +15,22 @@ export function compose(tree: IRNode | null, parts: Parts): { tree: IRNode | nul
   const used = new Set<string>();                      // which parts were instantiated (to hoist their data)
   const out = tree ? composeNode(tree, parts, used) : tree;
   return { tree: out, used: [...used] };
+}
+
+// THE single page-doc builder: inline parts, hoist the USED parts' entities/state, then flatten. Spreads
+// `ir` so EVERY field (imports/params/meta/…) survives — both the CLI loader and the editor analyzer go
+// through here, so a new IR field can never silently drop in just one path (the lint-drift that bit twice).
+export function composeDoc(ir: IR, parts: Parts): { doc: Doc; used: string[] } {
+  const { tree, used } = compose(ir.tree, parts);
+  const entities = { ...ir.entities };
+  const state = { ...ir.state };
+  for (const name of used) {
+    const p = parts[name];
+    if (!p) continue;
+    Object.assign(entities, p.entities);
+    Object.assign(state, p.state);
+  }
+  return { doc: toDoc({ ...ir, entities, state, tree }), used };
 }
 
 function composeNode(node: IRNode, parts: Parts, used: Set<string>): IRNode {
@@ -74,6 +91,7 @@ function subExpr(e: Expr, args: ArgMap): Expr {
   if (e.kind === Ek.Bin) return { ...e, left: subExpr(e.left, args), right: subExpr(e.right, args) };
   if (e.kind === Ek.Un) return { ...e, operand: subExpr(e.operand, args) };
   if (e.kind === Ek.Tern) return { ...e, cond: subExpr(e.cond, args), then: subExpr(e.then, args), else: subExpr(e.else, args) };
+  if (e.kind === Ek.Call) return { ...e, args: e.args.map((a) => subExpr(a, args)) }; // a use'd fn: substitute $params in its args
   return e; // literal: nothing to substitute
 }
 

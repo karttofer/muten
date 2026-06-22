@@ -124,7 +124,7 @@ export const MODIFIER_DOCS = {
   on: 'Custom component events wired to actions: `on(select: pick)`.',
 };
 
-export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'and', 'or', 'not', 'contains'];
+export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'and', 'or', 'not', 'contains', 'use'];
 export const KEYWORD_DOCS = {
   screen: 'Declares the screen name: `screen users_dashboard`.',
   entity: 'Declares a data shape + validation: `entity User { name text required  email email required  password text min:8 }` (implicit uuid id). Constraints: `required`, `min:N`, `max:N`.',

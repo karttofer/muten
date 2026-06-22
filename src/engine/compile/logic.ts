@@ -91,6 +91,7 @@ export class Logic {
   compileExpr(node: Expr, scope: Scope): string {
     if (node.kind === Ek.Lit) return JSON.stringify(node.value);
     if (node.kind === Ek.Ref) return this.resolveRef(node.name, scope);
+    if (node.kind === Ek.Call) return `${node.fn}(${node.args.map((a) => this.compileExpr(a, scope)).join(', ')})`; // a use'd JS function
     if (node.kind === Ek.Tern) return `(${this.compileExpr(node.cond, scope)} ? ${this.compileExpr(node.then, scope)} : ${this.compileExpr(node.else, scope)})`;
     if (node.kind === Ek.Un) {
       if (node.op === UOp.Not) return `!(${this.compileExpr(node.operand, scope)})`;

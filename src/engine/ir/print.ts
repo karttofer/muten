@@ -21,6 +21,7 @@ function printExpr(e: Expr): string {
     case Ek.Un: return `${e.op} ${wrap(e.operand)}`;
     case Ek.Bin: return `${wrap(e.left)} ${e.op} ${wrap(e.right)}`;
     case Ek.Tern: return `${wrap(e.cond)} ? ${wrap(e.then)} : ${wrap(e.else)}`;
+    case Ek.Call: return `${e.fn}(${e.args.map(printExpr).join(', ')})`;
   }
 }
 // parenthesize nested binary/ternary so re-parse rebuilds the same tree (over-parenthesizes; structure wins)
@@ -135,6 +136,7 @@ export function print(ir: IR): string {
 
   if (ir.consts) for (const [n, v] of Object.entries(ir.consts)) push(`const ${n} = ${printScalar(v)}`);
   push(ir.screen ? `screen ${ir.screen}` : undefined);
+  if (ir.imports) for (const i of ir.imports) push(`use ${i.names.join(', ')} from ${JSON.stringify(i.from)}`);
   if (ir.meta) push(block('meta', Object.entries(ir.meta).map(([k, v]) => `${IND}${k} ${JSON.stringify(v)}`).join('\n')));
   if (ir.params) for (const p of ir.params) push(`param ${p}`);
   if (ir.api) push(kvBlock('api', Object.entries(ir.api), ':'));

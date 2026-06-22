@@ -39,6 +39,22 @@ export function compileStore(input: StoreInput = {}, data: { [name: string]: Val
 export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectCss = '', components: { [name: string]: string } = {}, sources: { [name: string]: Value } = {}, opts: CompileOpts = {}): string {
   const { nodes, rootId, state, entities, screen } = doc;
   const theme: Theme = opts.theme || defaultTheme; // the scale comes from the project (else empty defaults)
+
+  // islands: `use X from "svelte:./X.svelte"` → a foreign-framework component mounted via an adapter.
+  // Each adapter → a DYNAMIC-import statement (vite code-splits it); the island never bloats the main chunk
+  // and the directive controls WHEN it loads. Add a tech = add an entry. If the placeholder already holds
+  // server-rendered HTML (full SSR) the client HYDRATES it; otherwise it mounts fresh. React re-renders
+  // reactively (render in an `effect`, so muten signals in the props flow down); Svelte mounts once.
+  const ADAPTERS: { [k: string]: (el: string, props: string, path: string) => string } = {
+    svelte: (el, props, path) => `import('svelte').then((__s) => import(${JSON.stringify(path)}).then((__c) => (${el}.hasChildNodes() ? __s.hydrate : __s.mount)(__c.default, { target: ${el}, props: ${props} })))`,
+    react: (el, props, path) => `Promise.all([import('react-dom/client'), import('react'), import(${JSON.stringify(path)})]).then(([__d, __r, __c]) => { const __root = ${el}.hasChildNodes() ? __d.hydrateRoot(${el}, __r.createElement(__c.default, ${props})) : __d.createRoot(${el}); effect(() => __root.render(__r.createElement(__c.default, ${props}))); })`,
+  };
+  const islands: { [name: string]: { adapter: string; path: string } } = {};
+  for (const imp of doc.imports || []) {
+    const m = /^(svelte|react):(.+)$/.exec(imp.from);
+    if (m) for (const n of imp.names) islands[n] = { adapter: m[1], path: m[2] };
+  }
+
   let lines: string[] = [];
   let hasSlot = false; // a shell with a `slot` returns its outlet from mount() so the router can target it
 
@@ -113,6 +129,26 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   function genNode(id: string, parentVar: string): void {
     const n = nodes[id];
     const p = n.props || {};
+    if (islands[n.type]) { // a foreign-framework island → placeholder div + DYNAMIC mount (props ↓ + events ↑)
+      const isl = islands[n.type];
+      lines.push(`const el_${id} = document.createElement('div');`);
+      lines.push(`${parentVar}.appendChild(el_${id});`);
+      const props = '{ ' + Object.entries(n.args || {}).map(([k, v]) => {
+        if (typeof v === 'string' && !v.startsWith('@') && (v in (doc.actions || {}) || v.includes('.'))) {
+          return `${JSON.stringify(k)}: (...__a) => ${logic.actionRef(v)}(...__a)`;  // event ↑: a muten action
+        }
+        return `${JSON.stringify(k)}: ${customValue(v)}`;                            // prop ↓: a value snapshot
+      }).join(', ') + ' }';
+      if (opts.format === Fmt.Ssr) { // pre-render: collect the island; the build server-renders + injects its HTML here
+        lines.push(`el_${id}.innerHTML = __ssrIsland(${JSON.stringify(isl.adapter)}, ${JSON.stringify(isl.path)}, ${props});`);
+        return;
+      }
+      const mount = ADAPTERS[isl.adapter](`el_${id}`, props, isl.path);             // client: dynamic import → hydrate/mount
+      lines.push(p.hydrate === 'visible' ? `__onVisible(el_${id}, () => ${mount});` // lazy: load+hydrate when scrolled into view
+        : p.hydrate === 'idle' ? `__onIdle(() => ${mount});`                         // lazy: load+hydrate when the browser is idle
+        : `${mount};`);                                                             // default (load): load+hydrate immediately
+      return;
+    }
     const cont = CONTAINERS[n.type]; // regions (Header/Nav/…) + Stack: [tag, baseClass]
     if (cont) {
       const [tag, base] = cont;
@@ -359,6 +395,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
     const interpKeys: Array<keyof NodeProps> = ['value', 'src', 'alt', 'label', 'to'];
     for (const id of Object.keys(nodes)) {
       const n = nodes[id]; const p = n.props || {};
+      if (islands[n.type]) return false; // a foreign-framework island needs client JS to mount
       if (reactiveType.has(n.type)) return false;
       if (reactiveProp.some((k) => p[k] !== undefined)) return false;
       if ((p.class || []).some((c) => typeof c !== 'string')) return false; // a reactive class toggle ⇒ not static
@@ -425,6 +462,18 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   // a page imports only the store domains it actually referenced (collected into ctx.usedStores above).
   const storeImports = [...usedStores].map((domain) => `import * as __store_${domain} from 'virtual:muten/store/${domain}';`).join('\n');
 
+  // `use a, b from "./lib.ts"` (no adapter prefix) → a real ESM import of the named JS functions.
+  const isIsland = (from: string) => /^(svelte|react):/.test(from);
+  const externImports = (doc.imports || []).filter((i) => !isIsland(i.from)).map((i) => `import { ${i.names.join(', ')} } from ${JSON.stringify(i.from)};`).join('\n');
+
+  // islands are dynamic-imported inline (code-split, see genNode) — nothing hoisted but the lazy helpers
+  // that `client:visible` / `client:idle` need.
+  const hydrates = new Set(Object.values(nodes).map((n) => n.props?.hydrate).filter(Boolean)); // client:* directives in use
+  const directiveHelpers: string[] = [];
+  if (hydrates.has('visible')) directiveHelpers.push(`const __onVisible = (el, cb) => { const o = new IntersectionObserver((es) => { if (es[0].isIntersecting) { o.disconnect(); cb(); } }); o.observe(el); };`);
+  if (hydrates.has('idle')) directiveHelpers.push(`const __onIdle = (cb) => (typeof requestIdleCallback === 'function' ? requestIdleCallback : (f) => setTimeout(f, 1))(cb);`);
+  const islandImports = directiveHelpers.join('\n');
+
   // page <head> meta: title/description from the `meta` block, with og:* auto-derived (one source, no DRY).
   const metaIn = doc.meta || {};
   const meta: { [k: string]: string } = { ...metaIn };
@@ -433,7 +482,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
 
   const parts: EmitParts = {
     screen, tokenCss, projectCss, data, sources, api: opts.api || {}, meta, queryUuids,
-    stateDecls, paramDecls, actionDecls, getDecls, effectDecls, componentDecls, storeImports,
+    stateDecls, paramDecls, actionDecls, getDecls, effectDecls, componentDecls, storeImports, externImports, islandImports,
     renderBody, staticHtml: staticHtml ?? '', hasSlot,
   };
   if (opts.format === Fmt.Store) return emitStore(parts);

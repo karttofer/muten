@@ -44,6 +44,7 @@ function dataLayer(parts: EmitParts): string {
 // one .store DOMAIN slice → shared ESM module (state + get + actions, no DOM).
 export function emitStore(parts: EmitParts): string {
   return `import { signal, computed, effect, __id, __has } from 'virtual:muten/runtime';
+${parts.externImports}
 
   ${dataLayer(parts)}
 
@@ -130,6 +131,8 @@ ${parts.staticHtml}
 export function emitModule(parts: EmitParts): string {
   return `import { signal, effect, __id, __has } from 'virtual:muten/runtime';
 ${parts.storeImports}
+${parts.externImports}
+${parts.islandImports}
 export const screen = ${JSON.stringify(parts.screen)};
 export const css = ${JSON.stringify(`${parts.tokenCss}\n${parts.projectCss}`)};
 export const meta = ${JSON.stringify(parts.meta)};

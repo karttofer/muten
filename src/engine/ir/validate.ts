@@ -9,7 +9,7 @@ import { resolveToken, SUGGESTED, defaultTheme, isKnownTokenShape } from '#engin
 import { diag, closest } from '#engine/shared/diagnostics.js';
 import { PRIMITIVE_NAMES, ACTION_OPS, PRIMITIVES } from '#engine/lang/manifest.js';
 import { Nt, Ek, StOp } from '#engine/shared/vocab.js';
-import type { Doc, FlatNode, ValidateCtx, ValidateResult, Diagnostic, Expr, Stmt, StringPropValue } from '#engine/shared/types.js';
+import type { Doc, FlatNode, ValidateCtx, ValidateResult, Diagnostic, Expr, Stmt, StringPropValue, Loc } from '#engine/shared/types.js';
 
 const KNOWN_TYPES = new Set<string>([...PRIMITIVE_NAMES, Nt.Shell]); // manifest primitives + the Shell wrapper (app.muten root)
 const REF_PROPS: Array<'bind' | 'data'> = ['bind', 'data']; // props whose value is @state
@@ -22,6 +22,16 @@ function collectRefs(e: Expr, acc: string[] = []): string[] {
   else if (e.kind === Ek.Un) collectRefs(e.operand, acc);
   else if (e.kind === Ek.Bin) { collectRefs(e.left, acc); collectRefs(e.right, acc); }
   else if (e.kind === Ek.Tern) { collectRefs(e.cond, acc); collectRefs(e.then, acc); collectRefs(e.else, acc); }
+  else if (e.kind === Ek.Call) { for (const a of e.args) collectRefs(a, acc); } // args' refs; the fn is checked separately
+  return acc;
+}
+
+// collect the names of `use`'d functions called in an expression (the fn of each call, recursively)
+function collectCalls(e: Expr, acc: string[] = []): string[] {
+  if (e.kind === Ek.Call) { acc.push(e.fn); for (const a of e.args) collectCalls(a, acc); }
+  else if (e.kind === Ek.Un) collectCalls(e.operand, acc);
+  else if (e.kind === Ek.Bin) { collectCalls(e.left, acc); collectCalls(e.right, acc); }
+  else if (e.kind === Ek.Tern) { collectCalls(e.cond, acc); collectCalls(e.then, acc); collectCalls(e.else, acc); }
   return acc;
 }
 
@@ -34,7 +44,17 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   const constNames = new Set(Object.keys(doc.consts || {})); // compile-time constants
   const paramNames = new Set(doc.params || []);              // route params (`param id`)
   const actionNames = new Set(Object.keys(doc.actions || {})); // for `action.pending` / `action.error` refs
+  const isIslandFrom = (from: string) => /^(svelte|react):/.test(from); // adapter-prefixed `use` = a component island
+  const externs = new Set((doc.imports || []).filter((i) => !isIslandFrom(i.from)).flatMap((i) => i.names)); // logic functions callable in exprs
+  const islandNames = new Set((doc.imports || []).filter((i) => isIslandFrom(i.from)).flatMap((i) => i.names)); // foreign-framework components used as nodes
   const nodes = doc.nodes || {};
+
+  // a `use`'d function call must reference a declared import (the seam to JS stays bounded + checkable)
+  const checkCalls = (expr: Expr, loc?: Loc | null): void => {
+    for (const fn of collectCalls(expr)) {
+      if (!externs.has(fn)) D.push(diag('unknown-function', `"${fn}" is not a use'd function`, { loc, suggestion: closest(fn, [...externs]) }));
+    }
+  };
 
   // CLOSED member sets → catch typos in a dotted ref. A query state exposes {loading,error,data} + (if it's
   // entity-typed) its fields; a store exposes its state/gets/actions (threaded in by lintApp, cross-file).
@@ -91,6 +111,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
 
   // validate the variables an expression uses against (item scope ∪ state)
   const checkExpr = (expr: Expr, node: FlatNode, scope: Set<string>): void => {
+    checkCalls(expr, node.loc); // `use`'d function calls must be declared
     for (const ref of collectRefs(expr)) {
       const dot = ref.indexOf('.');
       const head = dot === -1 ? ref : ref.slice(0, dot);
@@ -110,9 +131,11 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     if (seen.has(id)) { D.push(diag('dup-node', `${id} is referenced twice`, { loc: n.loc })); return; }
     seen.add(id);
 
-    if (!KNOWN_TYPES.has(n.type)) {
+    if (islandNames.has(n.type)) {
+      // a foreign-framework island (use X from "svelte:…") used as a node — valid; its internals are opaque
+    } else if (!KNOWN_TYPES.has(n.type)) {
       if (n.args) {
-        D.push(diag('unknown-part', `"${n.type}" is not a known part`, { loc: n.loc, suggestion: closest(n.type, ctx.parts || []) }));
+        D.push(diag('unknown-part', `"${n.type}" is not a known part`, { loc: n.loc, suggestion: closest(n.type, [...(ctx.parts || []), ...islandNames]) }));
       } else {
         D.push(diag('unknown-type', `"${n.type}" is not a known primitive`, { loc: n.loc, suggestion: closest(n.type, [...KNOWN_TYPES]) }));
       }
@@ -168,6 +191,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   // ── .store gets: each `get` expression resolves against the slice's own state ──
   if (ctx.kind === 'store') {
     for (const [name, expr] of Object.entries(doc.gets || {})) {
+      checkCalls(expr); // `use`'d functions in a store's get
       for (const ref of collectRefs(expr)) {
         const head = ref.split('.')[0];
         if (!stateKeys.has(head)) D.push(diag('unknown-ref', `get "${name}": "${head}" is not a state of this store`, { suggestion: closest(head, [...stateKeys]) }));
@@ -179,13 +203,14 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   for (const [name, a] of Object.entries(doc.actions || {})) {
     const declared = new Set(a.mutates || []);
     const checkStmt = (st: Stmt): void => {
-      if (st.op === StOp.If) { for (const s of (st.then || [])) checkStmt(s); for (const s of (st.else || [])) checkStmt(s); return; } // recurse into branches
+      if (st.op === StOp.If) { checkCalls(st.cond); for (const s of (st.then || [])) checkStmt(s); for (const s of (st.else || [])) checkStmt(s); return; } // recurse into branches
       if (!KNOWN_OPS.has(st.op)) {
         D.push(diag('unknown-op', `action "${name}" uses unknown op "${st.op}"`, { suggestion: closest(st.op, [...KNOWN_OPS]) }));
       }
       if ('target' in st && st.target && !declared.has(st.target)) {
         D.push(diag('undeclared-mutation', `action "${name}" mutates "${st.target}" but only declares mutates(${[...declared].join(', ') || '∅'})`, { suggestion: closest(st.target, [...declared]) }));
       }
+      if ('arg' in st && st.arg) checkCalls(st.arg); // a use'd function called in the statement's value
     };
     for (const st of a.body || []) checkStmt(st);
   }
