@@ -124,7 +124,7 @@ export const MODIFIER_DOCS = {
   on: 'Custom component events wired to actions: `on(select: pick)`.',
 };
 
-export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'where', 'and', 'or', 'not', 'contains', 'use'];
+export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'every', 'live', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'where', 'and', 'or', 'not', 'contains', 'use'];
 export const KEYWORD_DOCS = {
   screen: 'Declares the screen name: `screen users_dashboard`.',
   entity: 'Declares a data shape + validation: `entity User { name text required  email email required  password text min:8 }` (implicit uuid id). Constraints: `required`, `min:N`, `max:N`.',
@@ -150,6 +150,7 @@ export const KEYWORD_DOCS = {
   part: 'Reusable composition: `part Card(item: Item, onPick: action) { ... }`. Pass OBJECTS (`$item.field`) and ACTION callbacks (`-> $onPick(...)`). Inlined at build time.',
   param: 'Declares a route param read from the URL: `param id` for a route `/x/:id`. Usable in interpolation/`when`/expressions like a read-only string.',
   query: 'An async data source. The state exposes `.loading`, `.error` and `.data`.',
+  every: 'Poll a query on a timer: `query orders every 5s` (also `500ms`, `2m`). Silent auto-refetch — keyed reconciliation updates only the rows that changed (no full re-render, no loading flash).',
   if: 'Conditional INSIDE an action body: `if <expr> { … } else { … }` — the only branching in actions (toggles, validation, add-or-remove).',
   when: 'Conditional render: `when <expr> { ... }`.',
   each: 'List render: `each <list> as <item> { ... }`. Optional `where`: `each posts as p where p.published { ... }` renders only matching items.',

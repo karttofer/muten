@@ -24,7 +24,7 @@ entity T { label text  done bool }
 state { items = query items : list<T> }
 sources { items: { url: "/x" } }
 Page { each items as it { Text "{it.label}" class(done when it.done) } }`)));
-ok('conditional class in each uses the item', eachJs.includes('.classList.toggle("done", !!(it.done))'));
+ok('conditional class in each uses the item (reactive row signal)', eachJs.includes('.classList.toggle("done", !!(it.get().done))'));
 
 // dynamic navigation: `-> /product/{p.id}` → an interpolated href (reuses the Text interpolation machinery)
 const navJs = compileModule(toDoc(parse(`screen s
@@ -32,7 +32,7 @@ entity P { id text  title text }
 state { items = query items : list<P> }
 sources { items: { url: "/x" } }
 Page { each items as p { Link "{p.title}" -> /product/{p.id} } }`)));
-ok('dynamic link → interpolated href', navJs.includes(`"/product/" + String(p.id ?? '')`));
+ok('dynamic link → interpolated href', navJs.includes(`"/product/" + String(p.get().id ?? '')`));
 
 // a static path on a dynamic page stays a plain string href (no regression in the JS path)
 const staticJs = compileModule(toDoc(parse(`screen s

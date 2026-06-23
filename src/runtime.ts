@@ -4,20 +4,27 @@
 
 import type { Signal, EffectRun, PageModule, RouteDef } from '#engine/shared/types.js';
 
-let current: EffectRun | null = null;   // the effect currently running (so reads can subscribe it)
-let owner: EffectRun[] | null = null;   // effects created while a page mounts → disposed on unmount
+let current: EffectRun | null = null;            // the effect currently running (so reads can subscribe it)
+let owner: Array<EffectRun | (() => void)> | null = null;   // effects AND onCleanup teardowns created in the current scope → disposed together
 
 // A reactive cell. Reading it inside an effect subscribes that effect; writing notifies subscribers.
 export function signal<T>(value: T): Signal<T> {
   const subs = new Set<EffectRun>();
   return {
     get() { if (current) { subs.add(current); current.deps.add(subs); } return value; },
-    set(next: T) { if (next === value) return; value = next; for (const run of [...subs]) run(); },
+    set(next: T) { if (next === value) return; value = next; for (const run of [...subs]) run.sync ? run() : schedule(run); },
   };
 }
 
+// Batching (Solid-style): many sets in one tick flush their effects ONCE, in a microtask — so a burst
+// of updates (a real-time feed) re-renders each spot a single time. Computed effects are `sync` (run
+// immediately) so a `get` read elsewhere in the same tick is never stale.
+let pending: Set<EffectRun> | null = null;
+function flush(): void { const runs = pending; pending = null; if (runs) for (const run of runs) run(); }
+function schedule(run: EffectRun): void { if (!pending) { pending = new Set(); queueMicrotask(flush); } pending.add(run); }
+
 // Run `fn`, tracking every signal it reads; re-run it whenever any of those signals changes.
-export function effect(fn: () => void): EffectRun {
+export function effect(fn: () => void, sync?: boolean): EffectRun {
   const run: EffectRun = Object.assign(
     () => {
       if (run.disposed) return;
@@ -26,7 +33,7 @@ export function effect(fn: () => void): EffectRun {
       const prev = current; current = run;
       try { fn(); } finally { current = prev; }
     },
-    { deps: new Set<Set<EffectRun>>(), disposed: false },
+    { deps: new Set<Set<EffectRun>>(), disposed: false, sync },
   );
   if (owner) owner.push(run); // belongs to the page currently mounting → disposable on navigation
   run();
@@ -36,11 +43,19 @@ export function effect(fn: () => void): EffectRun {
 // Run `fn`, collecting every effect it creates, and return a disposer that stops them all. The router
 // uses this so an unmounted page's effects stop firing on shared store signals (cart/ui) — otherwise
 // they touch detached DOM (anchor.parentNode === null) and crash the whole UI.
-export function scope(fn: () => void): () => void {
-  const prev = owner; const owned: EffectRun[] = []; owner = owned;
-  try { fn(); } finally { owner = prev; }
-  return () => { for (const run of owned) { run.disposed = true; for (const dep of run.deps) dep.delete(run); run.deps.clear(); } };
+function disposeOwned(owned: Array<EffectRun | (() => void)>): void {
+  for (const o of owned) {
+    if ('deps' in o) { o.disposed = true; for (const dep of o.deps) dep.delete(o); o.deps.clear(); } // an effect
+    else o(); // an onCleanup teardown (a keyed list disposing its rows, a when disposing its block)
+  }
 }
+export function root<T>(fn: () => T): { value: T; dispose: () => void } {
+  const prev = owner; const owned: Array<EffectRun | (() => void)> = []; owner = owned;
+  let value: T; try { value = fn(); } finally { owner = prev; }
+  return { value, dispose: () => disposeOwned(owned) };
+}
+export function scope(fn: () => void): () => void { return root(fn).dispose; }
+export function onCleanup(fn: () => void): void { if (owner) owner.push(fn); }
 
 // `a contains b`: list membership OR case-insensitive substring — one operator, both meanings.
 export function __has<T>(a: readonly T[] | string | null | undefined, b: T): boolean {
@@ -48,11 +63,21 @@ export function __has<T>(a: readonly T[] | string | null | undefined, b: T): boo
   return String(a ?? '').toLowerCase().includes(String(b ?? '').toLowerCase());
 }
 
+// Shallow value equality — keyed reconciliation skips rows whose data didn't change.
+export function __eq(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) if ((a as Record<string, unknown>)[k] !== (b as Record<string, unknown>)[k]) return false;
+  return true;
+}
+
 // A derived/memoized value (a store `get`): recomputes when the signals it reads change. Seeded once
 // eagerly (a `get` is pure), then kept current by an effect that tracks its dependencies.
 export function computed<T>(fn: () => T): Signal<T> {
   const cell = signal(fn());
-  effect(() => cell.set(fn()));
+  effect(() => cell.set(fn()), true); // sync: a `get` read in the same tick is always fresh (no batching glitch)
   return cell;
 }
 

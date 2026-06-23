@@ -7,20 +7,33 @@ import { sourceRequest, sourceRows } from '#engine/shared/source.js';
 
 // the fine-grained signals runtime, inlined into the standalone HTML format (no bundler there).
 export const RUNTIME = `// ── fine-grained signals runtime (~18 lines, no dependencies) ──
-  let __current = null;
+  let __current = null;   // the effect currently tracking signal reads
+  let __owner = null;     // collects effects created in a scope so a keyed-list item can dispose its effects together
+  let __pending = null; function __flush() { const r = __pending; __pending = null; if (r) for (const run of r) run(); } function __schedule(run) { if (!__pending) { __pending = new Set(); queueMicrotask(__flush); } __pending.add(run); } // batch render effects → one run per tick
   function signal(value) {
     const subs = new Set();
     return {
-      get() { if (__current) subs.add(__current); return value; },
-      set(next) { if (next === value) return; value = next; for (const e of [...subs]) e(); },
+      get() { if (__current) { subs.add(__current); __current.deps.add(subs); } return value; },
+      set(next) { if (next === value) return; value = next; for (const e of [...subs]) e.sync ? e() : __schedule(e); },
     };
   }
-  function effect(fn) {
-    const run = () => { const prev = __current; __current = run; try { fn(); } finally { __current = prev; } };
+  function effect(fn, sync) {
+    const run = () => { for (const d of run.deps) d.delete(run); run.deps.clear(); const prev = __current; __current = run; try { fn(); } finally { __current = prev; } };
+    run.deps = new Set(); run.sync = sync; // sync effects (computed) run immediately on a set; render effects batch into a microtask
+    const dispose = () => { for (const d of run.deps) d.delete(run); run.deps.clear(); };
+    if (__owner) __owner.push(dispose);   // owned by the current scope → torn down with it
     run();
+    return dispose;
   }
-  function computed(fn) { const s = signal(fn()); effect(() => s.set(fn())); return s; } // derived signal (store \`get\`)
-  function __has(a, b) { return Array.isArray(a) ? a.includes(b) : String(a ?? '').toLowerCase().includes(String(b ?? '').toLowerCase()); }`;
+  function root(fn) {                       // an ownership scope: collects disposers (effects + child onCleanups); dispose() tears them ALL down (hierarchical)
+    const prev = __owner, owned = []; __owner = owned;
+    try { return { value: fn(), dispose() { for (const d of owned) d(); owned.length = 0; } }; }
+    finally { __owner = prev; }
+  }
+  function onCleanup(fn) { if (__owner) __owner.push(fn); }   // register a teardown with the current owner (a keyed list disposes all its rows; a when disposes its block)
+  function computed(fn) { const s = signal(fn()); effect(() => s.set(fn()), true); return s; } // derived signal (store \`get\`) — sync so reads never go stale
+  function __has(a, b) { return Array.isArray(a) ? a.includes(b) : String(a ?? '').toLowerCase().includes(String(b ?? '').toLowerCase()); }
+  function __eq(a, b) { if (a === b) return true; if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false; const __ka = Object.keys(a), __kb = Object.keys(b); if (__ka.length !== __kb.length) return false; for (const __k of __ka) if (a[__k] !== b[__k]) return false; return true; }`;
 
 // The data layer: a query is a RICH reactive signal { data, loading, error }. Real `sources` fetch over
 // HTTP (the full request — method/headers/body); otherwise a mock with a small delay so loading/error are
@@ -39,12 +52,12 @@ function dataLayer(parts: EmitParts): string {
   function __write(name, method, id, body) { const s = __SOURCES[name]; const q = __req(s, __API); let url = q.url; if (id != null) { url = (url.charAt(url.length - 1) === '/' ? url.slice(0, -1) : url) + '/' + encodeURIComponent(id); } const init = { method: method, headers: { ...q.headers } }; if (body != null) { init.body = JSON.stringify(body); if (!init.headers['content-type'] && !init.headers['Content-Type']) init.headers['content-type'] = 'application/json'; } return fetch(url, init).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return method === 'DELETE' ? null : r.json(); }); }
   function __refetch(name, params, sig) { const q = __req(__SOURCES[name], __API); const qs = Object.keys(params).map((k) => encodeURIComponent(k) + '=' + encodeURIComponent(params[k])).join('&'); const url = qs ? q.url + (q.url.indexOf('?') >= 0 ? '&' : '?') + qs : q.url; sig.set({ ...sig.get(), loading: true, error: null }); fetch(url, { method: q.method, headers: { ...q.headers } }).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then((j) => sig.set({ data: __fill(name, __rows(j, q.at)), loading: false, error: null })).catch((e) => sig.set({ ...sig.get(), loading: false, error: String(e) })); }
   function __send(url, method, body) { let d = { url: url, method: method }; const ci = url.indexOf(':'); if (ci > 0 && __API[url.slice(0, ci)]) d = { api: url.slice(0, ci), url: url.slice(ci + 1), method: method }; const q = __req(d, __API); const init = { method: q.method, headers: { ...q.headers } }; if (body != null) { init.body = JSON.stringify(body); if (!init.headers['content-type'] && !init.headers['Content-Type']) init.headers['content-type'] = 'application/json'; } return fetch(q.url, init).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.status === 204 ? null : r.json().catch(() => null); }); }
-  function query(name) { const sig = signal({ data: [], loading: true, error: null }); __fetch(name).then((d) => sig.set({ data: d, loading: false, error: null })).catch((e) => sig.set({ data: [], loading: false, error: String(e) })); return sig; }`;
+  function query(name, live) { const sig = signal({ data: [], loading: true, error: null }); if (live) { const q = __req(__SOURCES[name], __API); const ws = new WebSocket(q.url); ws.onmessage = (e) => sig.set({ data: __fill(name, __rows(JSON.parse(e.data), q.at)), loading: false, error: null }); ws.onerror = () => sig.set({ ...sig.get(), loading: false, error: 'socket error' }); onCleanup(() => ws.close()); } else { __fetch(name).then((d) => sig.set({ data: d, loading: false, error: null })).catch((e) => sig.set({ data: [], loading: false, error: String(e) })); } return sig; }`;
 }
 
 // one .store DOMAIN slice → shared ESM module (state + get + actions, no DOM).
 export function emitStore(parts: EmitParts): string {
-  return `import { signal, computed, effect, __id, __has } from 'virtual:muten/runtime';
+  return `import { signal, computed, effect, root, onCleanup, __eq, __id, __has } from 'virtual:muten/runtime';
 ${parts.externImports}
 
   ${dataLayer(parts)}
@@ -132,7 +145,7 @@ ${parts.staticHtml}
 
 // an ESM page module Vite bundles (npm imports, HMR, SPA).
 export function emitModule(parts: EmitParts): string {
-  return `import { signal, effect, __id, __has } from 'virtual:muten/runtime';
+  return `import { signal, computed, effect, root, onCleanup, __eq, __id, __has } from 'virtual:muten/runtime';
 ${parts.storeImports}
 ${parts.externImports}
 ${parts.islandImports}

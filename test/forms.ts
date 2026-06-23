@@ -53,6 +53,7 @@ ok('short password still blocked', !done());
 
 pass.handlers.input({ target: { value: '123456' } });        // now valid
 form.handlers.submit({ preventDefault() {} });
+await Promise.resolve();   // the result render batches into a microtask
 ok('valid submit runs the action', done());
 
 console.log(f ? `\n${f} FAILURE(S)` : '\nALL OK');

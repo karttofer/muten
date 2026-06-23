@@ -163,9 +163,11 @@ export class Parser extends Grammar {
       const nameTok = this.eat(Tk.Ident);
       this.eat(Tk.Punct, Pn.Assign);
       let source: string | undefined;
+      let refresh: number | undefined;
+      let live: boolean | undefined;
       let initial: Value | undefined;
       let hasInitial = false;
-      if (this.at(Tk.Ident, Kw.Query)) { this.next(); source = 'query:' + this.eat(Tk.Ident).v; } // async, list-shaped
+      if (this.at(Tk.Ident, Kw.Query)) { this.next(); source = 'query:' + this.eat(Tk.Ident).v; if (this.at(Tk.Ident, Kw.Live)) { this.next(); live = true; } else if (this.at(Tk.Ident, Kw.Every)) { this.next(); refresh = this.parseDuration(); } } // `query x live` → WebSocket; `every Ns` parked
       else if (this.at(Tk.Punct, Pn.BraceL) || this.at(Tk.Punct, Pn.BrackL)) { initial = this.parseValue(); hasInitial = true; }
       else if (this.at(Tk.String)) { initial = this.next().v; hasInitial = true; }
       else if (this.at(Tk.Number)) { initial = Number(this.next().v); hasInitial = true; }
@@ -175,9 +177,19 @@ export class Parser extends Grammar {
       this.eat(Tk.Punct, Pn.Colon);
       const type = this.parseType();
       const loc = this.locOf(nameTok.pos);
-      target[nameTok.v] = source ? { type, source, loc } : { type, initial: hasInitial ? initial : null, loc };
+      target[nameTok.v] = source ? { type, source, refresh, live, loc } : { type, initial: hasInitial ? initial : null, loc };
     }
     this.eat(Tk.Punct, Pn.BraceR);
+  }
+
+  // `every 5s | 500ms | 2m` → a poll interval in milliseconds (for `query x every …`).
+  private parseDuration(): number {
+    const start = this.peek();
+    const n = Number(this.eat(Tk.Number).v);
+    const unit = this.eat(Tk.Ident).v;
+    const mult = unit === 'ms' ? 1 : unit === 's' ? 1000 : unit === 'm' ? 60000 : 0;
+    if (!mult || !(n > 0)) throw new ParseError('`every` expects a positive duration like `5s`, `500ms`, or `2m`', this.locOf(start.pos));
+    return n * mult;
   }
 
   // get <name> = <expr>  — a .store derived/memoized value (compiles to a `computed`).
@@ -229,6 +241,12 @@ export class Parser extends Grammar {
   }
 
   private parseStatement(): Stmt {
+    const pos = this.peek().pos;            // first token of the statement → its line/col, so action-body diagnostics land on the right line
+    const st = this.parseStatementInner();
+    st.loc = this.locOf(pos);
+    return st;
+  }
+  private parseStatementInner(): Stmt {
     if (this.at(Tk.Ident, Kw.If)) return this.parseIf();
     if (this.at(Tk.Ident, 'post') || this.at(Tk.Ident, 'put') || this.at(Tk.Ident, 'delete')) return this.parseRequest();
     const target = this.eat(Tk.Ident).v;

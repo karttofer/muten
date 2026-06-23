@@ -42,7 +42,7 @@ export enum Kw {
   Screen = 'screen', Entity = 'entity', State = 'state', Store = 'store',
   Get = 'get', Effect = 'effect', Action = 'action', Mutates = 'mutates',
   Mock = 'mock', Sources = 'sources', Routes = 'routes', Shell = 'shell',
-  Part = 'part', Const = 'const', Theme = 'theme', Query = 'query', Param = 'param', Api = 'api', Body = 'body', Meta = 'meta',
+  Part = 'part', Const = 'const', Theme = 'theme', Query = 'query', Every = 'every', Live = 'live', Param = 'param', Api = 'api', Body = 'body', Meta = 'meta',
   Use = 'use', From = 'from', Client = 'client',
   When = 'when', Each = 'each', As = 'as', Where = 'where', If = 'if', Else = 'else',
   Guard = 'guard', Not = 'not', And = 'and', Or = 'or', Contains = 'contains',

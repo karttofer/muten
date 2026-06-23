@@ -66,6 +66,7 @@ export class Logic {
   resolveRef(name: string, scope: Scope): string {
     const [head, ...rest] = name.split('.');
     const tail = rest.length ? '.' + rest.join('.') : '';
+    if (scope.sigLocals?.has(head)) return `${head}.get()${tail}`;   // keyed-each row: a per-row signal, so its bindings react to the row's data
     if (scope.locals.has(head)) return head + tail;
     if (this.ctx.params.has(head)) return head + tail;        // a route param: a local string injected at mount
     if (this.ctx.queryStates.has(head)) {
@@ -215,7 +216,7 @@ export class Logic {
     const out: string[] = [];
     for (const [name, def] of Object.entries(this.ctx.state)) {
       if (typeof def.source === 'string' && def.source.startsWith('query:')) {
-        out.push(`${exp}const ${name} = query(${JSON.stringify(def.source.slice('query:'.length))}); // async: ${name}.loading / .error / .data`);
+        out.push(`${exp}const ${name} = query(${JSON.stringify(def.source.slice('query:'.length))}${def.live ? ', true' : ''}); // async: ${name}.loading / .error / .data${def.live ? ' — live (websocket)' : ''}`);
       } else {
         let initial: Value = def.initial ?? null;
         const elem = def.type.startsWith('list<') ? def.type.slice(5, -1) : '';

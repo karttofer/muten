@@ -193,25 +193,40 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`const body_${id} = el_${id}.createTBody();`);
         lines.push(`${parentVar}.appendChild(el_${id});`);
 
-        // one row → a <tr>; `row` is a lambda local inside this function (so refs resolve to it).
+        // one row → a <tr>; `row` is the row SIGNAL, so each cell reacts to the row's data (granular — a changed
+        // field rewrites only its <td>, never the row). RowAction args read the CURRENT row (`row.get()`).
         lines.push(`function renderRow_${id}(row) {`);
         lines.push(`  const tr = document.createElement('tr');`);
         for (const col of columns) {
-          lines.push(`  { const td = document.createElement('td'); td.textContent = row[${JSON.stringify(col)}] ?? ''; tr.appendChild(td); }`);
+          lines.push(`  { const td = document.createElement('td'); effect(() => { td.textContent = (row.get()[${JSON.stringify(col)}] ?? ''); }); tr.appendChild(td); }`);
         }
         for (const ra of rowActions) {
           const rp = ra.props || {};
-          const arg = rp.arg !== undefined ? logic.compileExpr(rp.arg, { locals: new Set(['row']) }) : '';
+          const arg = rp.arg !== undefined ? logic.compileExpr(rp.arg, { locals: new Set(), sigLocals: new Set(['row']) }) : '';
           lines.push(`  { const td = document.createElement('td'); const b = document.createElement('button'); b.className = ${JSON.stringify(classFor('row-action', rp))}; b.textContent = ${JSON.stringify(rp.label)}; b.addEventListener('click', () => ${logic.actionRef(rp.action)}(${arg})); td.appendChild(b); tr.appendChild(td); }`);
         }
         lines.push(`  return tr;`);
         lines.push(`}`);
 
-        // the body re-renders only when the data signal or a dynamic @ref of the where() changes.
+        // KEYED reconciliation (same engine as `each`): rows matched by id, reused/moved/disposed — never a full rebuild.
         lines.push(`function base_${id}() { return ${dataExpr}${staticExpr}; }`);
+        lines.push(`const start_${id} = document.createComment('rows');`);
+        lines.push(`const anchor_${id} = document.createComment('/rows');`);
+        lines.push(`body_${id}.appendChild(start_${id}); body_${id}.appendChild(anchor_${id});`);
+        lines.push(`const map_${id} = new Map();`);
+        lines.push(`onCleanup(() => { for (const __e of map_${id}.values()) __e.dispose(); map_${id}.clear(); });   // parent unmount → tear down every row`);
         lines.push(`effect(() => {`);
-        lines.push(`  const rows = base_${id}()${dynExpr};`);
-        lines.push(`  body_${id}.replaceChildren(...rows.map(renderRow_${id}));`);
+        lines.push(`  const __rows = base_${id}()${dynExpr};`);
+        lines.push(`  const __seen = new Set();`);
+        lines.push(`  let __prev = start_${id};`);
+        lines.push(`  for (const __row of __rows) {`);
+        lines.push(`    const __k = __row?.id ?? __row; __seen.add(__k);   // key by id (entities) or the value itself (scalars) — never index`);
+        lines.push(`    let __e = map_${id}.get(__k);`);
+        lines.push(`    if (__e) { if (!__eq(__e.data, __row)) { __e.data = __row; __e.sig.set(__row); } }`);
+        lines.push(`    else { const __sig = signal(__row); const __r = root(() => [renderRow_${id}(__sig)]); __e = { sig: __sig, nodes: __r.value, dispose: __r.dispose, data: __row }; map_${id}.set(__k, __e); }`);
+        lines.push(`    for (const __n of __e.nodes) { if (__prev.nextSibling !== __n) anchor_${id}.parentNode.insertBefore(__n, __prev.nextSibling); __prev = __n; }`);
+        lines.push(`  }`);
+        lines.push(`  for (const [__k, __e] of map_${id}) if (!__seen.has(__k)) { __e.dispose(); for (const __n of __e.nodes) __n.remove(); map_${id}.delete(__k); }`);
         lines.push(`});`);
         break;
       }
@@ -320,33 +335,49 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`}`);
         lines.push(`const anchor_${id} = document.createComment('when');`);
         lines.push(`${parentVar}.appendChild(anchor_${id});`);
-        lines.push(`let shown_${id} = [];`);
+        lines.push(`let shown_${id} = null;   // { value: nodes, dispose } while mounted, else null — dispose kills the block's effects on unmount (no zombies)`);
+        lines.push(`onCleanup(() => { if (shown_${id}) shown_${id}.dispose(); });   // parent unmount → tear down the mounted block too`);
         lines.push(`effect(() => {`);
         lines.push(`  if (${condJS}) {`);
-        lines.push(`    if (!shown_${id}.length) { const __f = document.createDocumentFragment(); build_${id}(__f); shown_${id} = [...__f.childNodes]; anchor_${id}.parentNode.insertBefore(__f, anchor_${id}); }`);
-        lines.push(`  } else if (shown_${id}.length) { for (const __n of shown_${id}) __n.remove(); shown_${id} = []; }`);
+        lines.push(`    if (!shown_${id}) { const __r = root(() => { const __f = document.createDocumentFragment(); build_${id}(__f); return [...__f.childNodes]; }); for (const __n of __r.value) anchor_${id}.parentNode.insertBefore(__n, anchor_${id}); shown_${id} = __r; }`);
+        lines.push(`  } else if (shown_${id}) { shown_${id}.dispose(); for (const __n of shown_${id}.value) __n.remove(); shown_${id} = null; }`);
         lines.push(`});`);
         break;
       }
 
       case Nt.Each: {
-        // list render: an effect rebuilds the items into a fragment whenever the list changes.
+        // KEYED reconciliation (fine-grained, no VDOM): each row is backed by a per-row signal. The body's
+        // bindings read it, so when a row's data changes ONLY that binding updates — never a full rebuild.
+        // Rows are matched by `id` (never index — that bleeds state), reused/moved in place, and disposed
+        // (effects too) when they leave. So focus / scroll / inputs survive live updates.
         if (!p.list || !p.as) throw new Error('each without a list or item variable');
         const listJS = logic.compileExpr(p.list, pageScope);
-        const filterJS = p.filter ? logic.compileExpr(p.filter, pageScope) : ''; // `where cond` — the item var resolves bare via resolveRef's fallback
+        const filterJS = p.filter ? logic.compileExpr(p.filter, pageScope) : ''; // `where cond` — item var bare (the raw row inside .filter)
+        // the body reads the row through its signal → compile its refs as `<as>.get()` (restore the scope after)
+        const prevSig = pageScope.sigLocals;
+        pageScope.sigLocals = new Set([...(prevSig || []), p.as]);
         const body = capture(() => genChildren(id, '__p'));
-        lines.push(`function buildItem_${id}(__p, ${p.as}) {`);
+        pageScope.sigLocals = prevSig;
+        lines.push(`function buildItem_${id}(__p, ${p.as}) {`); // ${p.as} is the row SIGNAL; body refs compiled as ${p.as}.get()
         for (const l of body) lines.push('  ' + l);
         lines.push(`}`);
-        lines.push(`const anchor_${id} = document.createComment('each');`);
-        lines.push(`${parentVar}.appendChild(anchor_${id});`);
-        lines.push(`let items_${id} = [];`);
+        lines.push(`const start_${id} = document.createComment('each');`);
+        lines.push(`const anchor_${id} = document.createComment('/each');`);
+        lines.push(`${parentVar}.appendChild(start_${id}); ${parentVar}.appendChild(anchor_${id});`);
+        lines.push(`const map_${id} = new Map();   // row id → { sig, nodes, dispose, data }`);
+        lines.push(`onCleanup(() => { for (const __e of map_${id}.values()) __e.dispose(); map_${id}.clear(); });   // parent unmount → tear down every row (no leaked effects)`);
         lines.push(`effect(() => {`);
-        lines.push(`  for (const __n of items_${id}) __n.remove();`);
-        lines.push(`  const __f = document.createDocumentFragment();`);
-        lines.push(`  for (const ${p.as} of (${listJS} ?? [])) ${filterJS ? `if (${filterJS}) ` : ''}buildItem_${id}(__f, ${p.as});`);
-        lines.push(`  items_${id} = [...__f.childNodes];`);
-        lines.push(`  anchor_${id}.parentNode.insertBefore(__f, anchor_${id});`);
+        lines.push(`  const __rows = (${listJS} ?? [])${filterJS ? `.filter((${p.as}) => ${filterJS})` : ''};`);
+        lines.push(`  const __seen = new Set();`);
+        lines.push(`  let __prev = start_${id};`);
+        lines.push(`  for (const __row of __rows) {`);
+        lines.push(`    const __k = __row?.id ?? __row; __seen.add(__k);   // key by id (entities) or the value itself (scalars) — never index`);
+        lines.push(`    let __e = map_${id}.get(__k);`);
+        lines.push(`    if (__e) { if (!__eq(__e.data, __row)) { __e.data = __row; __e.sig.set(__row); } }   // same row, changed data → granular update`);
+        lines.push(`    else { const __sig = signal(__row); const __r = root(() => { const __f = document.createDocumentFragment(); buildItem_${id}(__f, __sig); return [...__f.childNodes]; }); __e = { sig: __sig, nodes: __r.value, dispose: __r.dispose, data: __row }; map_${id}.set(__k, __e); }   // new row`);
+        lines.push(`    for (const __n of __e.nodes) { if (__prev.nextSibling !== __n) anchor_${id}.parentNode.insertBefore(__n, __prev.nextSibling); __prev = __n; }   // order: move only if out of place`);
+        lines.push(`  }`);
+        lines.push(`  for (const [__k, __e] of map_${id}) if (!__seen.has(__k)) { __e.dispose(); for (const __n of __e.nodes) __n.remove(); map_${id}.delete(__k); }   // gone → dispose effects + remove nodes`);
         lines.push(`});`);
         break;
       }

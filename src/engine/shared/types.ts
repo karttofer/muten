@@ -123,7 +123,7 @@ export interface RefetchStmt { op: StOp.Refetch; target: string; params: { [k: s
 export interface RequestStmt { op: StOp.Request; method: string; url: string | Interp; body: Expr | null; }
 export interface CallStmt { op: StOp.Call; target: string; method: string; args: Expr[]; } // a page action calling a STORE action: `shop.addProduct(draft)` (composition)
 export interface IfStmt { op: StOp.If; cond: Expr; then: Stmt[]; else: Stmt[] | null; }
-export type Stmt = PushStmt | SetStmt | ResetStmt | RemoveStmt | PatchStmt | CreateStmt | UpdateStmt | DeleteStmt | RefetchStmt | RequestStmt | CallStmt | IfStmt;
+export type Stmt = (PushStmt | SetStmt | ResetStmt | RemoveStmt | PatchStmt | CreateStmt | UpdateStmt | DeleteStmt | RefetchStmt | RequestStmt | CallStmt | IfStmt) & { loc?: Loc };
 
 
 // ── 6. Entities & validation schema ──────────────────────────────────────────
@@ -158,6 +158,8 @@ export interface EntityConstraints { [field: string]: FieldConstraint; }
 export interface StateDef {
   type: string;       // declared type tag: scalar | list<X> | an entity name
   source?: string;    // "query:<name>" for async query-backed state
+  refresh?: number;   // (parked) `query x every Ns` — polling was rejected; kept only so it still parses
+  live?: boolean;     // `query x live` → a WebSocket subscription (server pushes); the socket closes via onCleanup
   initial?: Value;    // declared initial literal (when not query-backed)
   loc?: Loc;
 }
@@ -428,6 +430,7 @@ export interface ValidateCtx {
 /** A lexical scope while compiling expressions: lambda locals + the action input. */
 export interface Scope {
   locals: Set<string>;
+  sigLocals?: Set<string>;   // keyed-each row vars backed by a per-row signal → refs compile to `<v>.get()` so bindings stay live
   input?: string;
   inputIsState?: boolean;
 }
@@ -474,7 +477,7 @@ export interface CompletionResult {
 /** A reactive cell: read tracks the current effect, write notifies subscribers. */
 export interface Signal<T> { get(): T; set(next: T): void; }
 /** An effect's run function, carrying its current dependency set + a disposed flag. */
-export interface EffectRun { (): void; deps: Set<Set<EffectRun>>; disposed: boolean; }
+export interface EffectRun { (): void; deps: Set<Set<EffectRun>>; disposed: boolean; sync?: boolean; }
 /** A compiled page/shell module: its scoped CSS + a mount() that builds it into a root element. */
 export interface PageModule { css: string; mount(root: Element, params?: { [key: string]: string }): Element; meta?: { [key: string]: string }; }
 /** One route's lazy loader + optional guard/redirect (the hash router consumes a map of these). */

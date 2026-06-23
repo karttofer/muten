@@ -381,7 +381,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   for (const [name, a] of Object.entries(doc.actions || {})) {
     const declared = new Set(a.mutates || []);
     const actionScope = new Map<string, string>(a.input ? [[a.input, ''] as [string, string]] : []); // the `<- input` var is in scope (untyped)
-    const checkStmt = (st: Stmt): void => {
+    const checkStmtInner = (st: Stmt): void => {
       // FULL ref-check on every expression in the body (was checkCalls-only → undeclared refs/typos shipped
       // silently and crashed at runtime). Covers `if` conds, set/push args, remove predicates, refetch params.
       if (st.op === StOp.If) { checkExpr(st.cond, null, actionScope); for (const s of (st.then || [])) checkStmt(s); for (const s of (st.else || [])) checkStmt(s); return; }
@@ -431,6 +431,14 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       else if (st.op === StOp.Refetch) { for (const v of Object.values(st.params)) checkExpr(v, null, actionScope); }
       else if (st.op === StOp.Request) { if (st.body) checkExpr(st.body, null, actionScope); }
       else if ('arg' in st && st.arg) checkExpr(st.arg, null, actionScope);
+    };
+    // Pin every diagnostic a statement emits to THAT statement's line. The inner checks push messages
+    // with no loc of their own (they describe a whole op); here we backfill the statement's loc so the
+    // IDE/CLI point at `orders.create(…)`, not at `screen home`. Nested if-branches resolve to their own line.
+    const checkStmt = (st: Stmt): void => {
+      const before = D.length;
+      checkStmtInner(st);
+      for (let i = before; i < D.length; i++) if (!D[i].loc) D[i].loc = st.loc ?? null;
     };
     for (const st of a.body || []) checkStmt(st);
   }

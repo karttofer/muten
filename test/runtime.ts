@@ -16,6 +16,7 @@ let runs = 0;
 const dispose = scope(() => { effect(() => { s.get(); runs++; }); });
 ok('scoped effect ran on create', runs === 1);
 s.set(1);
+await Promise.resolve();   // effects batch into a microtask now (Solid-style)
 ok('scoped effect ran on change', runs === 2);
 dispose();
 s.set(2);
@@ -26,6 +27,7 @@ const s2 = signal(0);
 let g = 0;
 effect(() => { s2.get(); g++; });
 s2.set(1);
+await Promise.resolve();
 ok('non-scoped effect still reacts', g === 2);
 
 console.log(f ? `\n${f} FAILURE(S)` : '\nALL OK');
