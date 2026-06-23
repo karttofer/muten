@@ -19,6 +19,7 @@ export const RUNTIME = `// ── fine-grained signals runtime (~18 lines, no de
     const run = () => { const prev = __current; __current = run; try { fn(); } finally { __current = prev; } };
     run();
   }
+  function computed(fn) { const s = signal(fn()); effect(() => s.set(fn())); return s; } // derived signal (store \`get\`)
   function __has(a, b) { return Array.isArray(a) ? a.includes(b) : String(a ?? '').toLowerCase().includes(String(b ?? '').toLowerCase()); }`;
 
 // The data layer: a query is a RICH reactive signal { data, loading, error }. Real `sources` fetch over
@@ -78,6 +79,8 @@ export function emitSsr(parts: EmitParts): string {
   const __UUIDS = ${JSON.stringify(parts.queryUuids)};
   const __fill = (name, rows) => { const ids = __UUIDS[name] || []; return rows.map((r) => { const o = { ...r }; for (const f of ids) if (o[f] === null || o[f] === undefined) o[f] = __id(); return o; }); };
   function query(name) { return signal({ data: __fill(name, __DATA[name] ?? []), loading: false, error: null }); }
+
+  ${parts.storeDecls}
 
   ${parts.paramDecls}
 
@@ -179,6 +182,9 @@ ${metaTags(parts.meta, parts.screen)}
   function __id() { return (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'id-' + (++__seq); }
 
   ${dataLayer(parts)}
+
+  // ── app-global stores, inlined (the CLI build has no virtual modules) ──
+  ${parts.storeDecls}
 
   // ── declared state (state from the IR) ──
   ${parts.stateDecls}

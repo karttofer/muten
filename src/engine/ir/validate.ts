@@ -8,12 +8,13 @@
 import { resolveToken, SUGGESTED, defaultTheme, isKnownTokenShape } from '#engine/style/tokens.js';
 import { diag, closest } from '#engine/shared/diagnostics.js';
 import { PRIMITIVE_NAMES, ACTION_OPS, PRIMITIVES } from '#engine/lang/manifest.js';
-import { Nt, Ek, StOp } from '#engine/shared/vocab.js';
+import { Nt, Ek, StOp, BOp } from '#engine/shared/vocab.js';
 import type { Doc, FlatNode, ValidateCtx, ValidateResult, Diagnostic, Expr, Stmt, StringPropValue, Loc } from '#engine/shared/types.js';
 
 const KNOWN_TYPES = new Set<string>([...PRIMITIVE_NAMES, Nt.Shell]); // manifest primitives + the Shell wrapper (app.muten root)
 const REF_PROPS: Array<'bind' | 'data'> = ['bind', 'data']; // props whose value is @state
 const KNOWN_OPS = new Set<string>(ACTION_OPS);
+const SOURCE_OPS = new Set<string>([StOp.Create, StOp.Update, StOp.Delete, StOp.Refetch]); // these talk to a backend → the list MUST be query/source-backed
 const SCALARS = ['text', 'number', 'bool', 'uuid', 'email', 'string'];
 
 // collect the variable names referenced by an expression AST
@@ -23,6 +24,8 @@ function collectRefs(e: Expr, acc: string[] = []): string[] {
   else if (e.kind === Ek.Bin) { collectRefs(e.left, acc); collectRefs(e.right, acc); }
   else if (e.kind === Ek.Tern) { collectRefs(e.cond, acc); collectRefs(e.then, acc); collectRefs(e.else, acc); }
   else if (e.kind === Ek.Call) { for (const a of e.args) collectRefs(a, acc); } // args' refs; the fn is checked separately
+  else if (e.kind === Ek.Obj) { for (const f of e.fields) collectRefs(f.value, acc); }
+  else if (e.kind === Ek.Agg) acc.push(e.list); // the LIST is an outer ref; the body's refs use the lambda var → checked separately
   return acc;
 }
 
@@ -32,6 +35,7 @@ function collectCalls(e: Expr, acc: string[] = []): string[] {
   else if (e.kind === Ek.Un) collectCalls(e.operand, acc);
   else if (e.kind === Ek.Bin) { collectCalls(e.left, acc); collectCalls(e.right, acc); }
   else if (e.kind === Ek.Tern) { collectCalls(e.cond, acc); collectCalls(e.then, acc); collectCalls(e.else, acc); }
+  else if (e.kind === Ek.Obj) { for (const f of e.fields) collectCalls(f.value, acc); }
   return acc;
 }
 
@@ -68,17 +72,21 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   }
   const storeMemberMap = new Map<string, Set<string>>();
   for (const [d, ms] of Object.entries(ctx.storeMembers || {})) storeMemberMap.set(d, new Set(ms));
-  const checkMember = (head: string, member: string, node: FlatNode): void => {
+  const checkMember = (head: string, member: string, loc: Loc | null): void => {
     const q = queryMembers.get(head);
-    if (q) { if (!q.has(member)) D.push(diag('unknown-member', `"${member}" is not a member of query "${head}"`, { loc: node.loc, suggestion: closest(member, [...q]), from: member })); return; }
+    if (q) { if (!q.has(member)) D.push(diag('unknown-member', `"${member}" is not a member of query "${head}"`, { loc, suggestion: closest(member, [...q]), from: member })); return; }
     const s = storeMemberMap.get(head);
-    if (s && !s.has(member)) D.push(diag('unknown-member', `"${member}" is not a member of store "${head}"`, { loc: node.loc, suggestion: closest(member, [...s]), from: member }));
+    if (s && !s.has(member)) D.push(diag('unknown-member', `"${member}" is not a member of store "${head}"`, { loc, suggestion: closest(member, [...s]), from: member }));
   };
 
   // ── state types: a `list` must declare its element (the north star — always know what's inside) ──
   const entityNames = Object.keys(doc.entities || {});
   for (const [name, def] of Object.entries(doc.state || {})) {
     const t = def.type;
+    if (def.source?.startsWith('query:') && t !== 'list' && !t.startsWith('list<')) {
+      // a query's data is ALWAYS an array — a single-record type silently renders empty (no fetch-one).
+      D.push(diag('query-not-list', `state "${name}" is a query but typed "${t}" — a query returns a LIST (the data is an array). Use \`list<${t}>\` and read it with \`each\`. (Single-record fetch isn't supported in muten.)`, { loc: def.loc, suggestion: `list<${t}>` }));
+    }
     if (t === 'list') {
       D.push(diag('untyped-list', `state "${name}" is an untyped "list" — declare the element type, e.g. list<uuid> or list<User>`, { loc: def.loc, suggestion: 'list<uuid>' }));
     } else if (t.startsWith('list<')) {
@@ -102,15 +110,17 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     return ent ? new Set(['id', ...Object.keys(ent)]) : null;
   };
   const listElem = (e: Expr | undefined): string => { // the element TYPE of `each <list>` (entity or scalar; '' if unresolved)
-    if (!e || e.kind !== Ek.Ref) return '';
-    const t = doc.state?.[e.name.split('.')[0]]?.type || '';
+    if (!e) return '';
+    const name = e.kind === Ek.Ref ? e.name : (e.kind === Ek.Agg && (e.op === 'sort' || e.op === 'sortDesc')) ? e.list : ''; // `each list.sort(…) as x` → the sorted list's element
+    if (!name) return '';
+    const t = doc.state?.[name.split('.')[0]]?.type || '';
     return t.startsWith('list<') ? t.slice(5, -1) : '';
   };
 
   const checkRef = (value: string | undefined, node: FlatNode): void => {
     if (typeof value === 'string' && value.startsWith('@')) {
       const name = value.slice(1).split('.')[0];
-      if (!stateKeys.has(name)) {
+      if (!stateKeys.has(name) && !storeDomains.has(name)) { // `@store.member` is a valid bind target too
         const near = closest(name, [...stateKeys]);
         D.push(diag('unknown-ref', `"@${name}" is not a declared state`, { loc: node.loc, suggestion: near ? '@' + near : null, from: '@' + name, related: near ? doc.state?.[near]?.loc ?? null : null }));
       }
@@ -121,21 +131,78 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   // action, `cart.add`) and $param (part callback) refs resolve elsewhere (cross-file / compose) — skip.
   const checkAction = (value: string | undefined, node: FlatNode): void => {
     if (!value || value.startsWith('$')) return;
-    if (value.includes('.')) { const dot = value.indexOf('.'); checkMember(value.slice(0, dot), value.slice(dot + 1).split('.')[0], node); return; } // store action (cart.add)
+    if (value.includes('.')) { const dot = value.indexOf('.'); checkMember(value.slice(0, dot), value.slice(dot + 1).split('.')[0], node.loc ?? null); return; } // store action (cart.add)
     if (!actionNames.has(value)) {
       D.push(diag('unknown-action', `"${value}" is not a declared action`, { loc: node.loc, suggestion: closest(value, [...actionNames]), from: value }));
     }
   };
 
+  // the type of an expression WHEN we can resolve it confidently — '' otherwise (so callers never flag on a guess).
+  const exprType = (e: Expr, scope: Map<string, string>): string => {
+    if (e.kind === Ek.Lit) return typeof e.value === 'number' ? 'number' : typeof e.value === 'boolean' ? 'bool' : 'text';
+    if (e.kind === Ek.Ref) {
+      const [head, ...rest] = e.name.split('.');
+      const t = scope.has(head) ? (scope.get(head) || '') : (doc.state?.[head]?.type || '');
+      if (!rest.length) return t;
+      return (rest.length === 1 && doc.entities?.[t]?.[rest[0]]) || ''; // an entity field's type (deeper / non-entity → unknown)
+    }
+    if (e.kind === Ek.Agg) return (e.op === 'sort' || e.op === 'sortDesc') ? '' : 'number'; // aggregates → number; sort → a list (don't infer)
+    return ''; // bin/call/obj/tern/un → don't infer
+  };
+  // arithmetic `- * /` on a NON-number operand → NaN at runtime. `+` is also string concat, so it's left alone.
+  const checkArith = (e: Expr, loc: Loc | null, scope: Map<string, string>): void => {
+    if (e.kind === Ek.Bin) {
+      if (e.op === BOp.Sub || e.op === BOp.Mul || e.op === BOp.Div) for (const side of [e.left, e.right]) {
+        const t = exprType(side, scope);
+        if (t && t !== 'number') D.push(diag('arith-type', `arithmetic \`${e.op}\` needs numbers, but an operand is "${t}" — declare it \`: number\`.`, { loc }));
+      }
+      // comparing two KNOWN, incompatible types is always false/true — the classic `when step == "1"` (a number
+      // state vs a quoted string) silently never matches. null compares with anything, so it's exempt.
+      if ([BOp.Eq, BOp.Neq, BOp.Lt, BOp.Gt, BOp.Lte, BOp.Gte].includes(e.op) && !(e.left.kind === Ek.Lit && e.left.value === null) && !(e.right.kind === Ek.Lit && e.right.value === null)) {
+        const norm = (t: string): string => (t === 'number' || t === 'bool') ? t : (t.startsWith('enum:') || ['text', 'string', 'email', 'uuid'].includes(t)) ? 'text' : t;
+        const lt = exprType(e.left, scope), rt = exprType(e.right, scope);
+        if (lt && rt && norm(lt) !== norm(rt)) D.push(diag('compare-type', `comparing a ${lt} to a ${rt} — they never match (always ${e.op === BOp.Neq ? 'true' : 'false'}). Likely a quoted number (\`== "1"\` vs \`== 1\`) or a type mismatch.`, { loc }));
+      }
+      checkArith(e.left, loc, scope); checkArith(e.right, loc, scope);
+    } else if (e.kind === Ek.Un) checkArith(e.operand, loc, scope);
+    else if (e.kind === Ek.Tern) { checkArith(e.cond, loc, scope); checkArith(e.then, loc, scope); checkArith(e.else, loc, scope); }
+    else if (e.kind === Ek.Obj) for (const f of e.fields) checkArith(f.value, loc, scope);
+    else if (e.kind === Ek.Call) for (const a of e.args) checkArith(a, loc, scope);
+  };
+
   // validate the variables an expression uses against (item scope ∪ state). `scope` maps an in-scope item
   // variable to its entity type ('' if not an entity list), so we can field-check the loop var too.
-  const checkExpr = (expr: Expr, node: FlatNode, scope: Map<string, string>): void => {
-    checkCalls(expr, node.loc); // `use`'d function calls must be declared
+  const checkExpr = (expr: Expr, loc: Loc | null, scope: Map<string, string>): void => {
+    checkArith(expr, loc, scope);
+    // list aggregates: the LIST must be a list; the body resolves with the lambda var bound to the element type.
+    const aggWalk = (e: Expr): void => {
+      if (e.kind === Ek.Agg) {
+        const head = e.list.split('.')[0];
+        const lt = scope.has(head) ? (scope.get(head) || '') : (doc.state?.[head]?.type || '');
+        const elem = lt.startsWith('list<') ? lt.slice(5, -1) : '';
+        if (lt && !lt.startsWith('list<') && !storeDomains.has(head)) D.push(diag('agg-not-list', `\`${e.op}(…)\` needs a list, but "${e.list}" is "${lt}".`, { loc }));
+        const bodyScope = new Map([...scope, [e.param, elem] as [string, string]]);
+        // sum/avg/min/max reduce a NUMBER projection (a `min` over text strings → Math.min(…,"2026-07") = NaN);
+        // count's body is a true/false condition, so it's exempt.
+        if (e.op !== 'count' && e.op !== 'sort' && e.op !== 'sortDesc') { const bt = exprType(e.body, bodyScope); if (bt && bt !== 'number') D.push(diag('agg-type', `\`${e.op}(…)\` reduces a NUMBER, but the body is "${bt}". Use a number projection (count uses a true/false condition).`, { loc })); }
+        checkExpr(e.body, loc, bodyScope);
+        return; // collectRefs already skips the body (the lambda var isn't in the outer scope)
+      }
+      if (e.kind === Ek.Bin) { aggWalk(e.left); aggWalk(e.right); }
+      else if (e.kind === Ek.Un) aggWalk(e.operand);
+      else if (e.kind === Ek.Tern) { aggWalk(e.cond); aggWalk(e.then); aggWalk(e.else); }
+      else if (e.kind === Ek.Obj) for (const f of e.fields) aggWalk(f.value);
+      else if (e.kind === Ek.Call) for (const a of e.args) aggWalk(a);
+    };
+    aggWalk(expr);
+    checkCalls(expr, loc); // `use`'d function calls must be declared
     for (const ref of collectRefs(expr)) {
       const dot = ref.indexOf('.');
       const head = dot === -1 ? ref : ref.slice(0, dot);
       if (!(scope.has(head) || stateKeys.has(head) || storeDomains.has(head) || constNames.has(head) || paramNames.has(head) || actionNames.has(head))) {
-        D.push(diag('unknown-ref', `"${head}" is not a known state or item variable here`, { loc: node.loc, suggestion: closest(head, [...stateKeys, ...scope.keys()]), from: head }));
+        const near = closest(head, [...stateKeys, ...scope.keys()]);
+        // a bare word with no close state is almost always a meant-to-be-quoted text/enum value (`status == todo`)
+        D.push(diag('unknown-ref', `"${head}" is not a known state or item variable here${near ? '' : ` — if it's a text/enum value, quote it: "${head}"`}`, { loc, suggestion: near, from: head }));
         continue;
       }
       if (dot === -1) continue;
@@ -145,25 +212,37 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       const t = scope.has(head) ? (scope.get(head) || '') : (doc.state?.[head]?.type || '');
       const fields = entityFieldSet(t);
       if (fields) {
-        if (!fields.has(member)) D.push(diag('unknown-member', `"${member}" is not a field of ${t} (${scope.has(head) ? 'item' : 'state'} "${head}")`, { loc: node.loc, suggestion: closest(member, [...fields]), from: member }));
+        if (!fields.has(member)) D.push(diag('unknown-member', `"${member}" is not a field of ${t} (${scope.has(head) ? 'item' : 'state'} "${head}")`, { loc, suggestion: closest(member, [...fields]), from: member }));
+        else { // depth-2+ chain `c.field.sub`: entity fields are scalars/enums (no sub-fields), so `.sub` is invalid unless the field is ITSELF an entity
+          const sub = ref.slice(dot + 1).split('.')[1];
+          const ft = doc.entities?.[t]?.[member] || '';
+          if (sub && !doc.entities?.[ft]) D.push(diag('unknown-member', `"${member}" is ${ft.startsWith('enum:') ? 'an enum' : `a ${ft}`} — it has no field "${sub}"`, { loc, from: sub }));
+        }
       } else if (SCALARS.includes(t)) {
-        D.push(diag('unknown-member', `"${head}" is a ${t} — it has no field "${member}"`, { loc: node.loc }));
+        D.push(diag('unknown-member', `"${head}" is a ${t} — it has no field "${member}"`, { loc }));
       } else if (actionNames.has(head) && !stateKeys.has(head)) {
         const am = new Set(['pending', 'error']); // an async action exposes only .pending / .error
-        if (!am.has(member)) D.push(diag('unknown-member', `action "${head}" exposes only .pending / .error, not "${member}"`, { loc: node.loc, suggestion: closest(member, [...am]), from: member }));
+        if (!am.has(member)) D.push(diag('unknown-member', `action "${head}" exposes only .pending / .error, not "${member}"`, { loc, suggestion: closest(member, [...am]), from: member }));
+      } else if (t.startsWith('list<')) {
+        // a list exposes only .length (and .data/.loading/.error if it's a query) — NOT arbitrary fields.
+        // Reading an element's field (`x.price`) is the bug we catch: iterate with `each x as item` instead.
+        const isQuery = !!doc.state?.[head]?.source;
+        const ok = isQuery ? new Set(['length', 'data', 'loading', 'error']) : new Set(['length']);
+        if (!ok.has(member)) D.push(diag('unknown-member', `"${head}" is a list — no member "${member}" (lists expose ${isQuery ? '.length / .data / .loading / .error' : 'only .length'}; use \`each ${head} as item\` to read an element)`, { loc, suggestion: closest(member, [...ok]), from: member }));
       } else {
-        checkMember(head, member, node); // typo'd query/store member
+        checkMember(head, member, loc); // typo'd query/store member
       }
     }
   };
 
   // ── the node tree: known type · required props · valid style tokens · resolvable expression refs ──
   const seen = new Set<string>();
-  const walk = (id: string, scope: Map<string, string>): void => {
+  const walk = (id: string, scope: Map<string, string>, inTable = false): void => {
     const n = nodes[id];
     if (!n) { D.push(diag('missing-node', `node ${id} does not exist`)); return; }
     if (seen.has(id)) { D.push(diag('dup-node', `${id} is referenced twice`, { loc: n.loc })); return; }
     seen.add(id);
+    if (n.type === 'RowAction' && !inTable) D.push(diag('rowaction-context', 'RowAction only works inside a DataTable (it renders a button per row). Use Button for a standalone action.', { loc: n.loc })); // else compile throws "unsupported primitive"
 
     if (islandNames.has(n.type)) {
       // a foreign-framework island (use X from "svelte:…") used as a node — valid; its internals are opaque
@@ -186,8 +265,50 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
 
     const props = n.props || {};
     for (const rp of REF_PROPS) if (rp in props) checkRef(props[rp], n);
-    if (props.action) checkAction(props.action, n);
+    if (props.action) {
+      checkAction(props.action, n);
+      // `-> action` / `-> action()` where the action declares `<- input` → the call passes nothing → the body
+      // reads `undefined` (e.g. `p.id` → TypeError). Require the arg. (store actions: input unknown here → skip.)
+      if (typeof props.action === 'string' && !props.action.includes('.') && doc.actions?.[props.action]?.input && props.arg === undefined)
+        D.push(diag('action-arity', `action "${props.action}" takes an argument (it reads "${doc.actions[props.action].input}") — pass it, e.g. \`-> ${props.action}(row)\``, { loc: n.loc }));
+    }
     if (props.submit) checkAction(props.submit, n);
+    if (Array.isArray(props.class)) for (const c of props.class) if (typeof c === 'string' && c.includes('{')) // class() does NOT interpolate — it would ship the literal braces into the DOM class
+      D.push(diag('class-interp', `class() does not interpolate "{…}": "${c}" would ship the braces literally. For a dynamic class use \`class(name when cond)\` (e.g. \`class(stage-applied when status == "applied")\`).`, { loc: n.loc, from: c }));
+    if (Array.isArray(props.where)) for (const clause of props.where) if (typeof clause === 'string' && clause.trim()) { // where() compiles ONLY `==`/`contains`, comma-separated; anything else THROWS or silently miscompiles → catch in check
+      if (!/(?:==|\bcontains\b)/.test(clause)) D.push(diag('unsupported-where', `where clause "${clause.trim()}" — where() supports only \`==\` and \`contains\` (e.g. where(role == admin, name contains @q)).`, { loc: n.loc, from: clause.trim() }));
+      else if (/\b(?:and|or)\b/.test(clause)) D.push(diag('unsupported-where', `where clause "${clause.trim()}" — combine conditions with a COMMA, not \`and\`/\`or\`: where(role == admin, name contains @q).`, { loc: n.loc, from: clause.trim() }));
+    }
+    if (n.type === 'Form') { // a Form auto-renders one input per ENTITY field → it MUST bind a PAGE-LOCAL entity draft; anything else crashes the compiler (editableFields(undefined) / state[sig] undefined)
+      const raw = String(props.bind ?? '').replace(/^@/, '');
+      const b = raw.split('.')[0];
+      const bt = b ? doc.state?.[b]?.type : undefined;
+      if (bt === undefined) D.push(diag('form-bind', `Form must bind a page-local draft (a state typed as an entity)${raw ? `, but "${raw}" is not a state on this page` : ''}${raw.includes('.') ? ' — a Form cannot bind a store field; declare a local `draft = {} : Entity` and submit the store action' : ''}.`, { loc: n.loc }));
+      else if (!doc.entities?.[bt]) D.push(diag('form-bind', `Form must bind a state typed as an entity (a draft): "${b}" is "${bt}". Declare \`entity X { … }\` + \`${b} = {} : X\`, or use SearchField for a single text input.`, { loc: n.loc }));
+    }
+    if (n.type === 'DataTable') { // columns + where fields must be REAL fields of the row entity (else blank column / dead filter / @ref crash)
+      const d = String(props.data ?? '').replace(/^@/, '');
+      const dt = doc.state?.[d]?.type || '';
+      const elem = dt.startsWith('list<') ? dt.slice(5, -1) : '';
+      const rowFields = entityFieldSet(elem);
+      if (rowFields) {
+        for (const col of (props.columns || [])) if (typeof col === 'string' && !rowFields.has(col)) D.push(diag('unknown-column', `column "${col}" is not a field of ${elem}`, { loc: n.loc, suggestion: closest(col, [...rowFields]), from: col }));
+        for (const clause of (props.where || [])) if (typeof clause === 'string') {
+          const field = clause.trim().split(/\s+/)[0];
+          if (field && !rowFields.has(field)) D.push(diag('unknown-where-field', `where "${clause.trim()}": "${field}" is not a field of ${elem}`, { loc: n.loc, suggestion: closest(field, [...rowFields]), from: field }));
+          for (const m of clause.matchAll(/@(\w+)/g)) if (!stateKeys.has(m[1])) D.push(diag('unknown-ref', `where "${clause.trim()}": "@${m[1]}" is not a declared state`, { loc: n.loc, from: '@' + m[1] }));
+        }
+      }
+    }
+    if (n.type === 'SearchField') { // a SearchField writes a single text string → binding a number/bool/list/entity silently corrupts it
+      const b = String(props.bind ?? '').replace(/^@/, '').split('.')[0];
+      const bt = b ? doc.state?.[b]?.type : undefined;
+      if (bt !== undefined && !['text', 'string', 'email'].includes(bt)) D.push(diag('bind-type', `SearchField binds a single text value, but "${b}" is "${bt}" — bind a text state (e.g. \`q = "" : text\`).`, { loc: n.loc }));
+    }
+    if (n.type === 'Custom') { // inputs(@state) + on(action) were NEVER validated → undefined refs / missing actions crash at runtime
+      for (const v of Object.values(props.inputs || {})) if (typeof v === 'string') checkRef(v, n);
+      for (const v of Object.values(props.on || {})) if (typeof v === 'string') checkAction(v, n);
+    }
     if (Array.isArray(props.style)) {
       const theme = ctx.theme || defaultTheme;
       const hasValues = Object.keys(theme.space || {}).length > 0; // a real project theme is present
@@ -202,8 +323,9 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       }
     }
     // expression references (when condition, each list, reactive Text/Image interpolation)
-    if (n.type === Nt.When && props.cond) checkExpr(props.cond, n, scope);
-    if (n.type === Nt.Each && props.list) checkExpr(props.list, n, scope);
+    if (n.type === Nt.When && props.cond) checkExpr(props.cond, n.loc ?? null, scope);
+    if (n.type === Nt.Each && props.list) checkExpr(props.list, n.loc ?? null, scope);
+    if (props.arg && typeof props.arg === 'object' && 'kind' in props.arg) checkExpr(props.arg as Expr, n.loc ?? null, scope); // `-> action(arg)` on Button/Link/RowAction — the arg was never ref-checked
     const interps: StringPropValue[] = [];
     if ((n.type === Nt.Text || n.type === Nt.Title || n.type === Nt.Span) && props.value) interps.push(props.value);
     if (n.type === Nt.Image) { if (props.src) interps.push(props.src); if (props.alt) interps.push(props.alt); }
@@ -211,42 +333,104 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     if (props.label) interps.push(props.label); // Link/Button/RowAction labels interpolate too
     for (const ip of interps) {
       if (typeof ip === 'object' && 'kind' in ip && ip.kind === Ek.Interp) {
-        for (const part of ip.parts) if (typeof part !== 'string') checkExpr(part, n, scope);
+        for (const part of ip.parts) if (typeof part !== 'string') checkExpr(part, n.loc ?? null, scope);
       }
     }
 
-    // children inherit the scope; an `each` adds its item variable, typed with the list's element entity
-    const childScope = (n.type === Nt.Each && props.as)
-      ? new Map([...scope, [props.as, listElem(props.list)] as [string, string]])
-      : scope;
-    for (const c of n.children || []) walk(c, childScope);
+    // children inherit the scope; an `each` adds its item variable + a DataTable adds the implicit `row`
+    // (its RowActions read `row.id`), both typed with the list's element entity.
+    let childScope = scope;
+    if (n.type === Nt.Each && props.as) {
+      childScope = new Map([...scope, [props.as, listElem(props.list)] as [string, string]]);
+      if (props.filter) checkExpr(props.filter, n.loc ?? null, childScope); // `where <cond>` reads the item var
+    }
+    else if (n.type === 'DataTable') {
+      const d = String(props.data || '').replace(/^@/, '');
+      const dt = doc.state?.[d]?.type || '';
+      childScope = new Map([...scope, ['row', dt.startsWith('list<') ? dt.slice(5, -1) : ''] as [string, string]]);
+    }
+    for (const c of n.children || []) walk(c, childScope, n.type === 'DataTable');
   };
   if (doc.rootId) walk(doc.rootId, new Map());
   else if (ctx.kind !== 'store') D.push(diag('no-root', 'the doc is missing a rootId'));
 
-  // ── .store gets: each `get` expression resolves against the slice's own state ──
+  // `get` / `effect` are .store-ONLY. On a page they parse but the page compiler emits nothing → the declaration
+  // is silently dropped (and a page that references the `get` then fails with unknown-ref). Reject them up front.
+  if (ctx.kind !== 'store') {
+    for (const g of Object.keys(doc.gets || {})) D.push(diag('store-only', `\`get ${g}\` is only valid in a .store — a page has no derived values. Compute it inline (\`{…}\`) or keep a state cell.`));
+    if ((doc.effects || []).length) D.push(diag('store-only', '`effect { }` is only valid in a .store — a page reacts through `when`/`each`, not effects.'));
+  }
+
+  // ── .store gets + effects: every expression resolves against the slice's own state (was head-only, so
+  // member typos `n.foo` and bad refs in `effect { }` shipped silently → runtime ReferenceError) ──
   if (ctx.kind === 'store') {
-    for (const [name, expr] of Object.entries(doc.gets || {})) {
-      checkCalls(expr); // `use`'d functions in a store's get
-      for (const ref of collectRefs(expr)) {
-        const head = ref.split('.')[0];
-        if (!stateKeys.has(head)) D.push(diag('unknown-ref', `get "${name}": "${head}" is not a state of this store`, { suggestion: closest(head, [...stateKeys]), from: head }));
-      }
-    }
+    for (const expr of Object.values(doc.gets || {})) checkExpr(expr, null, new Map());
+    const checkEff = (st: Stmt): void => {
+      if (st.op === StOp.If) { checkExpr(st.cond, null, new Map()); for (const s of (st.then || [])) checkEff(s); for (const s of (st.else || [])) checkEff(s); return; }
+      if ('target' in st && st.target && !stateKeys.has(st.target)) D.push(diag('undeclared-mutation', `effect mutates "${st.target}" — not a state of this store`, { suggestion: closest(st.target, [...stateKeys]), from: st.target })); // the TARGET was never checked → a typo'd effect target shipped a runtime ReferenceError
+      if (st.op === StOp.Remove) checkExpr(st.pred, null, new Map([[st.param, ''] as [string, string]]));
+      else if (st.op === StOp.Patch) { const inner = new Map([[st.param, ''] as [string, string]]); checkExpr(st.pred, null, inner); checkExpr(st.patch, null, inner); }
+      else if (st.op === StOp.Refetch) { for (const v of Object.values(st.params)) checkExpr(v, null, new Map()); }
+      else if (st.op === StOp.Request) { if (st.body) checkExpr(st.body, null, new Map()); }
+      else if ('arg' in st && st.arg) checkExpr(st.arg, null, new Map());
+    };
+    for (const eff of doc.effects || []) for (const st of eff) checkEff(st);
   }
 
   // ── actions: a body may only mutate what `mutates` declares, with known ops ──
   for (const [name, a] of Object.entries(doc.actions || {})) {
     const declared = new Set(a.mutates || []);
+    const actionScope = new Map<string, string>(a.input ? [[a.input, ''] as [string, string]] : []); // the `<- input` var is in scope (untyped)
     const checkStmt = (st: Stmt): void => {
-      if (st.op === StOp.If) { checkCalls(st.cond); for (const s of (st.then || [])) checkStmt(s); for (const s of (st.else || [])) checkStmt(s); return; } // recurse into branches
+      // FULL ref-check on every expression in the body (was checkCalls-only → undeclared refs/typos shipped
+      // silently and crashed at runtime). Covers `if` conds, set/push args, remove predicates, refetch params.
+      if (st.op === StOp.If) { checkExpr(st.cond, null, actionScope); for (const s of (st.then || [])) checkStmt(s); for (const s of (st.else || [])) checkStmt(s); return; }
+      if (st.op === StOp.Call) { // composing a STORE action — target is a store domain, method one of its actions
+        if (!storeDomains.has(st.target)) D.push(diag('unknown-action', `"${st.target}.${st.method}(…)": "${st.target}" is not a store. A page action mutates LOCAL state with push/set/patch/…; only a STORE action can be called like this.`, { suggestion: closest(st.target, [...storeDomains]), from: st.target }));
+        else if (!storeMemberMap.get(st.target)?.has(st.method)) D.push(diag('unknown-action', `store "${st.target}" has no member "${st.method}".`, { suggestion: closest(st.method, [...(storeMemberMap.get(st.target) || [])]), from: st.method }));
+        for (const a of st.args) checkExpr(a, null, actionScope);
+        return;
+      }
       if (!KNOWN_OPS.has(st.op)) {
         D.push(diag('unknown-op', `action "${name}" uses unknown op "${st.op}"`, { suggestion: closest(st.op, [...KNOWN_OPS]), from: st.op }));
       }
       if ('target' in st && st.target && !declared.has(st.target)) {
         D.push(diag('undeclared-mutation', `action "${name}" mutates "${st.target}" but only declares mutates(${[...declared].join(', ') || '∅'})`, { suggestion: closest(st.target, [...declared]), from: st.target }));
       }
-      if ('arg' in st && st.arg) checkCalls(st.arg); // a use'd function called in the statement's value
+      if (SOURCE_OPS.has(st.op) && 'target' in st && st.target) {            // create/update/delete/refetch hit the backend → require a source
+        const def = doc.state?.[st.target];
+        if (def && !def.source) D.push(diag('missing-source', `action "${name}": "${st.target}.${st.op}(…)" needs a query/source-backed list, but "${st.target}" is local (no source). Use \`= query <name>\` + a \`sources\` entry, or local ops (push/set/reset/remove).`, { from: st.target }));
+      }
+      if ((st.op === StOp.Push || st.op === StOp.Create || st.op === StOp.Set) && st.arg) {
+        // wrong TYPE into an entity slot ships garbage: push/create a non-entity into list<Entity> → `{...42}`={};
+        // set an entity draft to a scalar → `d["name"]` on a string → undefined (silent field corruption).
+        const tt = doc.state?.[st.target]?.type || '';
+        const slot = st.op === StOp.Set ? tt : (tt.startsWith('list<') ? tt.slice(5, -1) : '');
+        if (slot && doc.entities?.[slot]) {
+          const a = st.arg;
+          if (a.kind === Ek.Obj) { // an inline object literal: every key must be a real field of the entity
+            const ent = doc.entities[slot];
+            for (const f of a.fields) if (!(f.key in ent)) D.push(diag('unknown-field', `action "${name}": "${f.key}" is not a field of ${slot}`, { suggestion: closest(f.key, Object.keys(ent)), from: f.key }));
+          } else {
+            const at = a.kind === Ek.Lit ? (typeof a.value === 'number' ? 'number' : typeof a.value === 'boolean' ? 'bool' : 'text') : (a.kind === Ek.Ref && !a.name.includes('.') ? (doc.state?.[a.name]?.type || '') : '');
+            if (at && at !== slot) D.push(diag(st.op === StOp.Set ? 'set-type' : 'push-type', st.op === StOp.Set
+              ? `action "${name}": setting "${st.target}" (a ${slot} draft) to a ${at} — assign a ${slot} (a draft/state of that entity).`
+              : `action "${name}": pushing a ${at} into list<${slot}> "${st.target}" — push a ${slot} (a draft/state of that entity).`));
+          }
+        }
+      }
+      if (st.op === StOp.Remove) checkExpr(st.pred, null, new Map([...actionScope, [st.param, ''] as [string, string]])); // the predicate's lambda var is in scope
+      else if (st.op === StOp.Patch) { // patch(x => pred, { field: val }): the lambda var IS a list element (typed)
+        const lt = doc.state?.[st.target]?.type || '';
+        const elem = lt.startsWith('list<') ? lt.slice(5, -1) : '';
+        const inner = new Map([...actionScope, [st.param, elem] as [string, string]]);
+        checkExpr(st.pred, null, inner);
+        checkExpr(st.patch, null, inner);
+        if (elem && doc.entities?.[elem] && st.patch.kind === Ek.Obj) { const ent = doc.entities[elem]; for (const f of st.patch.fields) if (!(f.key in ent)) D.push(diag('unknown-field', `action "${name}": "${f.key}" is not a field of ${elem}`, { suggestion: closest(f.key, Object.keys(ent)), from: f.key })); }
+      }
+      else if (st.op === StOp.Refetch) { for (const v of Object.values(st.params)) checkExpr(v, null, actionScope); }
+      else if (st.op === StOp.Request) { if (st.body) checkExpr(st.body, null, actionScope); }
+      else if ('arg' in st && st.arg) checkExpr(st.arg, null, actionScope);
     };
     for (const st of a.body || []) checkStmt(st);
   }

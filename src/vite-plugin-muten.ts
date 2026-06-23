@@ -125,7 +125,7 @@ if (root) {
 
       if (id.startsWith('\0' + STORE_PREFIX)) { // one store domain → its compiled ESM slice
         const ir = slices[id.slice(('\0' + STORE_PREFIX).length)];
-        if (ir) return compileStore({ state: ir.state || {}, gets: ir.gets || {}, actions: ir.actions || {}, effects: ir.effects || [], entities: ir.entities || {} }, ir.mock || {}, ir.sources || {});
+        if (ir) return compileStore({ state: ir.state || {}, gets: ir.gets || {}, actions: ir.actions || {}, effects: ir.effects || [], entities: ir.entities || {}, imports: ir.imports || [] }, ir.mock || {}, ir.sources || {});
       }
 
       if (id === '\0' + SHELL) { // persistent chrome (navbar + slot); falls back to a bare outlet

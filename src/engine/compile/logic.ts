@@ -9,7 +9,7 @@
 
 import { Ek, StOp, BOp, UOp, Fmt } from '#engine/shared/vocab.js';
 import { JS_BINOP } from '#engine/compile/helpers.js';
-import type { CompileCtx, Expr, Stmt, Scope } from '#engine/shared/types.js';
+import type { CompileCtx, Expr, Stmt, Scope, Value, ValueObject } from '#engine/shared/types.js';
 
 export class Logic {
   constructor(private readonly ctx: CompileCtx) {}
@@ -69,7 +69,7 @@ export class Logic {
     if (scope.locals.has(head)) return head + tail;
     if (this.ctx.params.has(head)) return head + tail;        // a route param: a local string injected at mount
     if (this.ctx.queryStates.has(head)) {
-      if (rest[0] === 'loading' || rest[0] === 'error') return `${head}.get()${tail}`;
+      if (rest[0] === 'loading' || rest[0] === 'error' || rest[0] === 'data') return `${head}.get()${tail}`; // .data/.loading/.error ARE the signal's fields — don't double the .data
       return `${head}.get().data${tail}`;                 // @users → the data array; @users.length → its length
     }
     if (this.ctx.stateKeys.has(head)) return `${head}.get()` + tail;
@@ -92,6 +92,23 @@ export class Logic {
     if (node.kind === Ek.Lit) return JSON.stringify(node.value);
     if (node.kind === Ek.Ref) return this.resolveRef(node.name, scope);
     if (node.kind === Ek.Call) return `${node.fn}(${node.args.map((a) => this.compileExpr(a, scope)).join(', ')})`; // a use'd JS function
+    if (node.kind === Ek.Obj) return `{ ${node.fields.map((f) => `${JSON.stringify(f.key)}: ${this.compileExpr(f.value, scope)}`).join(', ')} }`; // inline object literal
+    if (node.kind === Ek.Agg) { // list aggregate → reduce/filter, OR sort → a sorted COPY; lambda var bound bare in scope
+      const list = `(${this.resolveRef(node.list, scope)} ?? [])`;
+      const body = this.compileExpr(node.body, { ...scope, locals: new Set([...scope.locals, node.param]) });
+      if (node.op === 'sort' || node.op === 'sortDesc') { // sort a COPY by the key the lambda projects (no mutation of the source signal)
+        const dir = node.op === 'sortDesc' ? -1 : 1;
+        const key = `((${node.param}) => ${body})`;
+        return `[...${list}].sort((__a, __b) => { const __ka = ${key}(__a), __kb = ${key}(__b); return (__ka < __kb ? -1 : __ka > __kb ? 1 : 0) * ${dir}; })`;
+      }
+      const reduce = (init: string, step: string): string => `${list}.reduce((__a, ${node.param}) => ${step}, ${init})`;
+      if (node.op === 'count') return `${list}.filter((${node.param}) => ${body}).length`;
+      if (node.op === 'sum') return reduce('0', `__a + (${body})`);
+      if (node.op === 'avg') return `(${reduce('0', `__a + (${body})`)} / (${list}.length || 1))`;
+      // min/max guard the empty list → 0 (not ±Infinity, which would render as garbage)
+      if (node.op === 'min') return `(${list}.length ? ${reduce('Infinity', `Math.min(__a, ${body})`)} : 0)`;
+      return `(${list}.length ? ${reduce('-Infinity', `Math.max(__a, ${body})`)} : 0)`; // max
+    }
     if (node.kind === Ek.Tern) return `(${this.compileExpr(node.cond, scope)} ? ${this.compileExpr(node.then, scope)} : ${this.compileExpr(node.else, scope)})`;
     if (node.kind === Ek.Un) {
       if (node.op === UOp.Not) return `!(${this.compileExpr(node.operand, scope)})`;
@@ -145,6 +162,16 @@ export class Logic {
       out.push(ctx.queryStates.has(st.target)
         ? `${st.target}.set({ ...${st.target}.get(), data: ${st.target}.get().data.filter((${st.param}) => !(${pred})) });`
         : `${st.target}.set(${st.target}.get().filter((${st.param}) => !(${pred})));`);
+    } else if (st.op === StOp.Patch) {
+      // in-place edit: map the list, merging the patch object into items the predicate matches. `.map` keeps
+      // order (no reorder) and `{ ...item, ...patch }` only overwrites the listed fields (no drop).
+      const inner: Scope = { ...scope, locals: new Set([...scope.locals, st.param]) };
+      const pred = this.compileExpr(st.pred, inner);
+      const patch = this.compileExpr(st.patch, inner);
+      const mapped = (src: string): string => `${src}.map((${st.param}) => (${pred}) ? { ...${st.param}, ...${patch} } : ${st.param})`;
+      out.push(ctx.queryStates.has(st.target)
+        ? `${st.target}.set({ ...${st.target}.get(), data: ${mapped(`${st.target}.get().data`)} });`
+        : `${st.target}.set(${mapped(`${st.target}.get()`)});`);
     } else if (st.op === StOp.Create || st.op === StOp.Update || st.op === StOp.Delete) {
       // server CRUD on a source-backed list: POST/PUT/DELETE the item, then reflect the change in the list.
       const isQuery = ctx.queryStates.has(st.target);
@@ -172,6 +199,10 @@ export class Logic {
         : st.url.parts.map((p) => typeof p === 'string' ? JSON.stringify(p) : `String(${this.compileExpr(p, scope)})`).join(' + ');
       const body = st.body ? this.compileExpr(st.body, scope) : 'null';
       out.push(isAsync ? `await __send(${url}, ${JSON.stringify(st.method)}, ${body});` : `__send(${url}, ${JSON.stringify(st.method)}, ${body}).catch(() => {});`);
+    } else if (st.op === StOp.Call) {
+      // a page action composing a STORE action: `shop.addProduct(draft)` → call the inlined/imported store fn.
+      this.ctx.usedStores.add(st.target);
+      out.push(`__store_${st.target}.${st.method}(${st.args.map((a) => this.compileExpr(a, scope)).join(', ')});`);
     }
     return out;
   }
@@ -186,7 +217,21 @@ export class Logic {
       if (typeof def.source === 'string' && def.source.startsWith('query:')) {
         out.push(`${exp}const ${name} = query(${JSON.stringify(def.source.slice('query:'.length))}); // async: ${name}.loading / .error / .data`);
       } else {
-        out.push(`${exp}const ${name} = signal(${JSON.stringify(def.initial ?? null)});`);
+        let initial: Value = def.initial ?? null;
+        const elem = def.type.startsWith('list<') ? def.type.slice(5, -1) : '';
+        const uuids = elem ? this.uuidFields(elem) : [];
+        if (uuids.length && Array.isArray(initial)) {
+          // a literal seed needs a stable id too — `push` auto-mints one but seed rows didn't, so remove/update
+          // by id matched `undefined == undefined` (moving ONE item hit them ALL). Fill it deterministically
+          // (compile-time, so SSR and CSR agree — a runtime __id() would mismatch on hydration).
+          initial = initial.map((row, i): Value => {
+            if (typeof row !== 'object' || row === null || Array.isArray(row)) return row;
+            const o: ValueObject = { ...row };
+            for (const f of uuids) if (o[f] === null || o[f] === undefined) o[f] = `${name}-${i}`;
+            return o;
+          });
+        }
+        out.push(`${exp}const ${name} = signal(${JSON.stringify(initial)});`);
       }
     }
     return out.join('\n  ');

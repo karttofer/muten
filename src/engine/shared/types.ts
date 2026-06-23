@@ -82,7 +82,9 @@ export interface BinExpr { kind: Ek.Bin; op: BOp; left: Expr; right: Expr; }
 export interface TernExpr { kind: Ek.Tern; cond: Expr; then: Expr; else: Expr; }
 /** A call to a `use`'d JS function: `fmt(date, "…")`. `fn` is the imported name; never a muten primitive. */
 export interface CallExpr { kind: Ek.Call; fn: string; args: Expr[]; }
-export type Expr = LitExpr | RefExpr | UnExpr | BinExpr | TernExpr | CallExpr;
+export interface ObjExpr { kind: Ek.Obj; fields: Array<{ key: string; value: Expr }>; } // inline object literal: `{ title: @draft.title, qty: 1 }`
+export interface AggExpr { kind: Ek.Agg; op: string; list: string; param: string; body: Expr; } // list aggregate: `lines.sum(l => l.price * l.qty)`
+export type Expr = LitExpr | RefExpr | UnExpr | BinExpr | TernExpr | CallExpr | ObjExpr | AggExpr;
 
 /** A `use a, b from "./lib.ts"` — named JS functions muten may call. The seam to the JS ecosystem. */
 export interface ImportDef { names: string[]; from: string; }
@@ -110,6 +112,7 @@ export interface PushStmt { op: StOp.Push; target: string; arg: Expr; }
 export interface SetStmt { op: StOp.Set; target: string; arg: Expr; }
 export interface ResetStmt { op: StOp.Reset; target: string; }
 export interface RemoveStmt { op: StOp.Remove; target: string; param: string; pred: Expr; }
+export interface PatchStmt { op: StOp.Patch; target: string; param: string; pred: Expr; patch: Expr; } // in-place edit: `list.patch(x => x.id == id, { field: val })` → position-preserving map
 /** Server CRUD on a source-backed list: POST/PUT/DELETE the item, then reflect the result in the list. */
 export interface CreateStmt { op: StOp.Create; target: string; arg: Expr; }
 export interface UpdateStmt { op: StOp.Update; target: string; arg: Expr; }
@@ -118,8 +121,9 @@ export interface DeleteStmt { op: StOp.Delete; target: string; arg: Expr; }
 export interface RefetchStmt { op: StOp.Refetch; target: string; params: { [k: string]: Expr }; }
 /** Explicit non-REST request (escape hatch): `post "shop:/orders" body item`, `delete "shop:/x/{id}"`. */
 export interface RequestStmt { op: StOp.Request; method: string; url: string | Interp; body: Expr | null; }
+export interface CallStmt { op: StOp.Call; target: string; method: string; args: Expr[]; } // a page action calling a STORE action: `shop.addProduct(draft)` (composition)
 export interface IfStmt { op: StOp.If; cond: Expr; then: Stmt[]; else: Stmt[] | null; }
-export type Stmt = PushStmt | SetStmt | ResetStmt | RemoveStmt | CreateStmt | UpdateStmt | DeleteStmt | RefetchStmt | RequestStmt | IfStmt;
+export type Stmt = PushStmt | SetStmt | ResetStmt | RemoveStmt | PatchStmt | CreateStmt | UpdateStmt | DeleteStmt | RefetchStmt | RequestStmt | CallStmt | IfStmt;
 
 
 // ── 6. Entities & validation schema ──────────────────────────────────────────
@@ -240,6 +244,7 @@ export interface NodeProps {
   cond?: Expr;
   list?: Expr;
   as?: string;
+  filter?: Expr;  // `each x as i where <cond>` — render only items matching cond (kills the each+when leak)
 }
 
 /** A nested authoring node (before flatten); also the shape parts/shell hold. */
@@ -346,6 +351,7 @@ export interface CompileOpts {
   format?: Fmt;
   theme?: Theme;
   stores?: { [domain: string]: StoreSlice };
+  storeCode?: string;                // standalone-build only: the `.store` slices INLINED (the CLI SSG has no virtual modules → `muten build` must bake the store code into the page itself)
   api?: { [name: string]: Value };   // app-wide backend config (base + default headers) applied to `sources`
 }
 
@@ -369,7 +375,7 @@ export interface CompileCtx {
 
 /** An editable Form field derived from an entity (excludes the auto uuid id). */
 export interface EnumField { name: string; kind: Fk.Enum; options: string[]; }
-export interface SimpleField { name: string; kind: Fk.Text | Fk.Email; }
+export interface SimpleField { name: string; kind: Fk.Text | Fk.Email | Fk.Number | Fk.Bool; }
 export type EditableField = EnumField | SimpleField;
 
 /** Input to compileStore(): one .store domain slice (state + get + actions + effects + entities). */
@@ -379,6 +385,7 @@ export interface StoreInput {
   actions?: { [name: string]: ActionDef };
   effects?: Stmt[][];
   entities?: { [name: string]: Entity };
+  imports?: ImportDef[];                          // `use fmt from "./lib.ts"` — else a store's use'd calls have no import (ReferenceError)
 }
 
 /** The pre-computed pieces an emit target assembles into the final output (HTML/module/store). */
@@ -398,6 +405,7 @@ export interface EmitParts {
   effectDecls: string;
   componentDecls: string;
   storeImports: string;
+  storeDecls: string;      // standalone HTML/SSR only: the `.store` slices inlined as `const __store_X = (…)()`
   externImports: string;   // `import { fmt } from "./lib.ts"` for each logic-function `use` declaration
   islandImports: string;   // adapter import + component import + mount glue for each `use X from "svelte:…"`
   renderBody: string;

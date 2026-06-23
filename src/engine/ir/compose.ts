@@ -92,6 +92,8 @@ function subExpr(e: Expr, args: ArgMap): Expr {
   if (e.kind === Ek.Un) return { ...e, operand: subExpr(e.operand, args) };
   if (e.kind === Ek.Tern) return { ...e, cond: subExpr(e.cond, args), then: subExpr(e.then, args), else: subExpr(e.else, args) };
   if (e.kind === Ek.Call) return { ...e, args: e.args.map((a) => subExpr(a, args)) }; // a use'd fn: substitute $params in its args
+  if (e.kind === Ek.Obj) return { ...e, fields: e.fields.map((f) => ({ key: f.key, value: subExpr(f.value, args) })) };
+  if (e.kind === Ek.Agg) return { ...e, list: refText(e.list, args), body: subExpr(e.body, args) };
   return e; // literal: nothing to substitute
 }
 

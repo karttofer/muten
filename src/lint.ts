@@ -6,6 +6,7 @@ import { join, relative } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import { readRoutes } from '#engine/project/routes.js';
 import { load, loadParts, findStores } from '#engine/project/load.js';
+import { validateStoresAndGuards } from '#engine/project/check-app.js';
 import { parse } from '#engine/lang/parse.js';
 import { toDoc } from '#engine/ir/flatten.js';
 import { validate } from '#engine/ir/validate.js';
@@ -48,6 +49,12 @@ export async function lintApp(appRoot: string, json = false): Promise<number> {
         }
       }
     } catch (e) { if (!(e instanceof ParseError)) throw e; } // a syntax error surfaces via the pages' load
+  }
+
+  // .store bodies + route guards — SHARED with `build` (check-app.ts) so check and build never disagree.
+  for (const d of validateStoresAndGuards(appRoot, storeIRs, storeMembers)) {
+    if (!json) console.log(formatDiagnostic(d, d.file));
+    found.push(d);
   }
 
   if (json) console.log(JSON.stringify(found, null, 2));

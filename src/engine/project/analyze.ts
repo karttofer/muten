@@ -127,8 +127,8 @@ export function analyze(filePath: string, text: string): ValidateResult {
   }
   if (ir.routes) return analyzeRoutes(filePath, ir.routes); // app.muten = ROOT file, not a page
   if (ir.theme) return { ok: true, diagnostics: [] };       // theme.muten = a config block, not a page
-  if (filePath.endsWith('.store')) { // a .store DOMAIN slice (state + get + action), not a page
-    return validate({ screen: 'store', state: ir.state || {}, actions: ir.actions || {}, entities: ir.entities || {}, gets: ir.gets || {}, consts: {}, constraints: {}, rootId: undefined, nodes: {} }, { kind: 'store' });
+  if (filePath.endsWith('.store')) { // a .store DOMAIN slice (state + get + action + effect), not a page
+    return validate({ screen: 'store', state: ir.state || {}, actions: ir.actions || {}, entities: ir.entities || {}, gets: ir.gets || {}, effects: ir.effects || [], consts: {}, constraints: {}, rootId: undefined, nodes: {} }, { kind: 'store' });
   }
   const parts = projectParts(filePath);
   const { doc } = composeDoc(ir, parts); // resolve parts (typos survive → flagged) + hoist state → THE one doc builder

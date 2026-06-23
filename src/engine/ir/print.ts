@@ -22,6 +22,8 @@ function printExpr(e: Expr): string {
     case Ek.Bin: return `${wrap(e.left)} ${e.op} ${wrap(e.right)}`;
     case Ek.Tern: return `${wrap(e.cond)} ? ${wrap(e.then)} : ${wrap(e.else)}`;
     case Ek.Call: return `${e.fn}(${e.args.map(printExpr).join(', ')})`;
+    case Ek.Obj: return `{ ${e.fields.map((f) => `${f.key}: ${printExpr(f.value)}`).join(', ')} }`;
+    case Ek.Agg: return `${e.list}.${e.op}(${e.param} => ${printExpr(e.body)})`;
   }
 }
 // parenthesize nested binary/ternary so re-parse rebuilds the same tree (over-parenthesizes; structure wins)
@@ -59,11 +61,13 @@ function printStmt(s: Stmt, ind: string): string {
     case StOp.Set: return `${s.target}.set(${printExpr(s.arg)})`;
     case StOp.Reset: return `${s.target}.reset()`;
     case StOp.Remove: return `${s.target}.remove(${s.param} => ${printExpr(s.pred)})`;
+    case StOp.Patch: return `${s.target}.patch(${s.param} => ${printExpr(s.pred)}, ${printExpr(s.patch)})`;
     case StOp.Create: return `${s.target}.create(${printExpr(s.arg)})`;
     case StOp.Update: return `${s.target}.update(${printExpr(s.arg)})`;
     case StOp.Delete: return `${s.target}.delete(${printExpr(s.arg)})`;
     case StOp.Refetch: return `${s.target}.refetch(${Object.entries(s.params).map(([k, e]) => `${k}: ${printExpr(e)}`).join(', ')})`;
     case StOp.Request: return `${s.method.toLowerCase()} ${typeof s.url === 'string' ? JSON.stringify(s.url) : printInterp(s.url)}${s.body ? ` body ${printExpr(s.body)}` : ''}`;
+    case StOp.Call: return `${s.target}.${s.method}(${s.args.map(printExpr).join(', ')})`;
     case StOp.If: {
       const then = s.then.map((st) => ind + IND + printStmt(st, ind + IND)).join('\n');
       const elsePart = s.else ? ` else {\n${s.else.map((st) => ind + IND + printStmt(st, ind + IND)).join('\n')}\n${ind}}` : '';

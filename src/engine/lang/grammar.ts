@@ -13,7 +13,7 @@
 
 import { ParseError } from '#engine/shared/diagnostics.js';
 import { tokenize } from '#engine/lang/lexer.js';
-import { Tk, Pn, Kw, BOp, UOp, Ek } from '#engine/shared/vocab.js';
+import { Tk, Pn, Kw, BOp, UOp, Ek, AGG_OPS, SORT_OPS } from '#engine/shared/vocab.js';
 import type { Token, Loc, Expr, Interp, Scalar, Value } from '#engine/shared/types.js';
 
 // Comparison operators expressed as data: [token kind, optional token value] → the binary op
@@ -139,17 +139,39 @@ export class Grammar {
     return { kind: Ek.Un, op: UOp.Not, operand: this.unary() };
   }
 
-  // the atoms: a parenthesised expression, a literal, or a (possibly dotted) reference.
+  // the atoms: a parenthesised expression, an object literal, a literal, or a (possibly dotted) reference.
   private primary(): Expr {
     if (this.at(Tk.Punct, Pn.ParenL)) { this.next(); const inner = this.ternary(); this.eat(Tk.Punct, Pn.ParenR); return inner; }
+    if (this.at(Tk.Punct, Pn.BraceL)) { // inline object literal: `{ title: @t, qty: 1 }` — the one missing value form
+      this.next();
+      const fields: Array<{ key: string; value: Expr }> = [];
+      while (!this.at(Tk.Punct, Pn.BraceR)) {
+        const key = this.eat(Tk.Ident).v;
+        this.eat(Tk.Punct, Pn.Colon);
+        fields.push({ key, value: this.ternary() });
+        if (this.at(Tk.Punct, Pn.Comma)) this.next();
+      }
+      this.eat(Tk.Punct, Pn.BraceR);
+      return { kind: Ek.Obj, fields };
+    }
     if (this.at(Tk.String)) return { kind: Ek.Lit, value: this.next().v };
     if (this.at(Tk.Number)) return { kind: Ek.Lit, value: Number(this.next().v) };
     let name = this.at(Tk.Param) ? '$' + this.next().v : this.eat(Tk.Ident).v; // $param resolves at compose time
     const literal = LITERALS.get(name);
     if (literal !== undefined) return { kind: Ek.Lit, value: literal }; // true | false | null
     while (this.at(Tk.Punct, Pn.Dot)) { this.next(); name += '.' + this.eat(Tk.Ident).v; } // user.name, cart.total
-    if (this.at(Tk.Punct, Pn.ParenL)) {                       // a call: fmt(a, b) → a use'd function
-      this.next();
+    if (this.at(Tk.Punct, Pn.ParenL)) {
+      const dot = name.lastIndexOf('.');
+      const op = dot === -1 ? '' : name.slice(dot + 1);
+      if (AGG_OPS.has(op) || SORT_OPS.has(op)) {              // list aggregate (lines.sum(…)) or sort (contacts.sort(c => c.name))
+        this.next();
+        const param = this.eat(Tk.Ident).v;
+        this.eat(Tk.FatArrow);
+        const body = this.ternary();
+        this.eat(Tk.Punct, Pn.ParenR);
+        return { kind: Ek.Agg, op, list: name.slice(0, dot), param, body };
+      }
+      this.next();                                            // a call: fmt(a, b) → a use'd function
       const args: Expr[] = [];
       while (!this.at(Tk.Punct, Pn.ParenR)) { args.push(this.ternary()); if (this.at(Tk.Punct, Pn.Comma)) this.next(); }
       this.eat(Tk.Punct, Pn.ParenR);

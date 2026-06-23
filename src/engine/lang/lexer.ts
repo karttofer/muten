@@ -58,10 +58,15 @@ class Lexer {
 
   private skipComment(): void { while (this.index < this.source.length && this.source[this.index] !== '\n') this.index++; }
 
-  // "...": read until the closing quote.
+  // "...": read until the closing quote — but a `"` INSIDE a `{…}` interpolation is a nested string literal,
+  // not the end (so `"Total ({items.count(i => i.status == "paid")})"` lexes as one string with an interp).
   private scanString(start: number): void {
-    const { source } = this; let end = this.index + 1; let value = '';
-    while (end < source.length && source[end] !== '"') { value += source[end]; end++; }
+    const { source } = this; let end = this.index + 1; let value = ''; let depth = 0;
+    while (end < source.length && (source[end] !== '"' || depth > 0)) {
+      if (source[end] === '{') depth++;
+      else if (source[end] === '}') depth--;
+      value += source[end]; end++;
+    }
     this.push(Tk.String, value, start); this.index = end + 1;
   }
 

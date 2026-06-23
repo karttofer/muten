@@ -32,8 +32,8 @@ export function compileModule(doc: Doc, data: { [name: string]: Value } = {}, pr
 
 // Emit one .store DOMAIN slice (state + get + actions + effects) as a shared ESM module.
 export function compileStore(input: StoreInput = {}, data: { [name: string]: Value } = {}, sources: { [name: string]: Value } = {}): string {
-  const { state = {}, gets = {}, actions = {}, effects = [], entities = {} } = input;
-  return compile({ screen: 'store', entities, state, actions, gets, effects, consts: {}, constraints: {}, rootId: undefined, nodes: {} }, data, '', {}, sources, { format: Fmt.Store });
+  const { state = {}, gets = {}, actions = {}, effects = [], entities = {}, imports = [] } = input;
+  return compile({ screen: 'store', entities, state, actions, gets, effects, imports, consts: {}, constraints: {}, rootId: undefined, nodes: {} }, data, '', {}, sources, { format: Fmt.Store });
 }
 
 export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectCss = '', components: { [name: string]: string } = {}, sources: { [name: string]: Value } = {}, opts: CompileOpts = {}): string {
@@ -168,7 +168,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`el_${id}.type = 'search';`);
         lines.push(`el_${id}.className = ${JSON.stringify(classFor('search', p))};`);
         if (typeof p.placeholder === 'string') lines.push(`el_${id}.placeholder = ${JSON.stringify(p.placeholder)};`);
-        lines.push(`el_${id}.value = ${sig}.get();`);
+        lines.push(`effect(() => { if (el_${id}.value !== ${sig}.get()) el_${id}.value = ${sig}.get(); });`); // two-way: state→input too (so `.reset()` clears the box), guarded to not yank the caret
         lines.push(`el_${id}.addEventListener('input', (e) => ${sig}.set(e.target.value));`);
         lines.push(`${parentVar}.appendChild(el_${id});`);
         break;
@@ -218,7 +218,8 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
 
       case Nt.Form: {
         const sig = logic.bindSig(p.bind);
-        const entityName = state[sig].type;
+        const entityName = state[sig]?.type; // validate rejects a non-local / non-entity bind; guard so a gap never throws a raw TypeError
+        if (!entityName || !entities[entityName]) throw new Error(`Form must bind a page-local entity draft, not "${p.bind}"`);
         const fields = editableFields(entities[entityName]);
         const fc = (doc.constraints || {})[entityName] || {}; // per-field validation from the entity schema
 
@@ -236,14 +237,23 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
             for (const opt of f.options) {
               lines.push(`{ const o = document.createElement('option'); o.value = ${JSON.stringify(opt)}; o.textContent = ${JSON.stringify(opt)}; ${fv}.appendChild(o); }`);
             }
+          } else if (f.kind === Fk.Bool) {
+            lines.push(`const ${fv} = document.createElement('input');`);
+            lines.push(`${fv}.type = 'checkbox';`);
+            lines.push(`${fv}.className = 'field-check';`);
           } else {
             lines.push(`const ${fv} = document.createElement('input');`);
-            lines.push(`${fv}.type = ${JSON.stringify(f.kind === Fk.Email ? 'email' : 'text')};`);
+            lines.push(`${fv}.type = ${JSON.stringify(f.kind === Fk.Email ? 'email' : f.kind === Fk.Number ? 'number' : 'text')};`);
             lines.push(`${fv}.className = 'field';`);
             lines.push(`${fv}.placeholder = ${JSON.stringify(f.name)};`);
           }
-          // each keystroke patches the bound draft's sub-field (immutably, so the effect below re-runs).
-          lines.push(`${fv}.addEventListener('input', (e) => ${sig}.set({ ...${sig}.get(), ${JSON.stringify(f.name)}: e.target.value }));`);
+          // each edit patches the bound draft's sub-field (immutably, so the reflect effect re-runs). A checkbox
+          // stores its `checked` boolean; a number COERCES (`Number()`), else `e.target.value` is a raw string.
+          if (f.kind === Fk.Bool) lines.push(`${fv}.addEventListener('change', (e) => ${sig}.set({ ...${sig}.get(), ${JSON.stringify(f.name)}: e.target.checked }));`);
+          else {
+            const val = f.kind === Fk.Number ? '(Number(e.target.value) || 0)' : 'e.target.value';
+            lines.push(`${fv}.addEventListener('input', (e) => ${sig}.set({ ...${sig}.get(), ${JSON.stringify(f.name)}: ${val} }));`);
+          }
           lines.push(`el_${id}.appendChild(${fv});`);
           if (fc[f.name]) lines.push(`const err_${fv} = document.createElement('small'); err_${fv}.className = 'field-error'; el_${id}.appendChild(err_${fv});`);
         }
@@ -256,13 +266,20 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
           const err = `err_${fv.var}`, val = `String(__d[${JSON.stringify(fv.name)}] ?? '')`;
           vChecks.push(`${err}.textContent = '';`);
           if (fv.c.required) vChecks.push(`if (!${val}.trim()) { ${err}.textContent = 'Required'; __ok = false; }`);
-          if (fv.c.min != null) vChecks.push(`if (${val} && ${val}.length < ${fv.c.min}) { ${err}.textContent = 'Min ${fv.c.min} characters'; __ok = false; }`);
-          if (fv.c.max != null) vChecks.push(`if (${val}.length > ${fv.c.max}) { ${err}.textContent = 'Max ${fv.c.max} characters'; __ok = false; }`);
+          // a number field's min/max is a VALUE bound; a text field's is a character-length bound.
+          if (fv.c.min != null) vChecks.push(fv.kind === Fk.Number
+            ? `if (${val} !== '' && Number(${val}) < ${fv.c.min}) { ${err}.textContent = 'Min ${fv.c.min}'; __ok = false; }`
+            : `if (${val} && ${val}.length < ${fv.c.min}) { ${err}.textContent = 'Min ${fv.c.min} characters'; __ok = false; }`);
+          if (fv.c.max != null) vChecks.push(fv.kind === Fk.Number
+            ? `if (${val} !== '' && Number(${val}) > ${fv.c.max}) { ${err}.textContent = 'Max ${fv.c.max}'; __ok = false; }`
+            : `if (${val}.length > ${fv.c.max}) { ${err}.textContent = 'Max ${fv.c.max} characters'; __ok = false; }`);
         }
+        // pass the bound draft to the submit action — a `<- item` action receives it (the whole point of a
+        // Form); an action that reads the draft by name just ignores the extra arg. Mirrors `Button -> a(x)`.
         if (vChecks.length) {
-          lines.push(`el_${id}.addEventListener('submit', (e) => { e.preventDefault(); const __d = ${sig}.get(); let __ok = true; ${vChecks.join(' ')} if (__ok) ${logic.actionRef(p.submit)}(); });`);
+          lines.push(`el_${id}.addEventListener('submit', (e) => { e.preventDefault(); const __d = ${sig}.get(); let __ok = true; ${vChecks.join(' ')} if (__ok) ${logic.actionRef(p.submit)}(__d); });`);
         } else {
-          lines.push(`el_${id}.addEventListener('submit', (e) => { e.preventDefault(); ${logic.actionRef(p.submit)}(); });`);
+          lines.push(`el_${id}.addEventListener('submit', (e) => { e.preventDefault(); ${logic.actionRef(p.submit)}(${sig}.get()); });`);
         }
 
         // reflect the bound draft back into the fields, so `draft.reset()` clears the form for free.
@@ -270,6 +287,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`effect(() => {`);
         lines.push(`  const d = ${sig}.get();`);
         for (const fv of fieldVars) {
+          if (fv.kind === Fk.Bool) { lines.push(`  { const v = !!d[${JSON.stringify(fv.name)}]; if (${fv.var}.checked !== v) ${fv.var}.checked = v; }`); continue; }
           const def = fv.kind === Fk.Enum ? JSON.stringify(fv.options[0]) : `''`;
           lines.push(`  { const v = d[${JSON.stringify(fv.name)}] ?? ${def}; if (${fv.var}.value !== v) ${fv.var}.value = v; }`);
         }
@@ -315,6 +333,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         // list render: an effect rebuilds the items into a fragment whenever the list changes.
         if (!p.list || !p.as) throw new Error('each without a list or item variable');
         const listJS = logic.compileExpr(p.list, pageScope);
+        const filterJS = p.filter ? logic.compileExpr(p.filter, pageScope) : ''; // `where cond` — the item var resolves bare via resolveRef's fallback
         const body = capture(() => genChildren(id, '__p'));
         lines.push(`function buildItem_${id}(__p, ${p.as}) {`);
         for (const l of body) lines.push('  ' + l);
@@ -325,7 +344,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`effect(() => {`);
         lines.push(`  for (const __n of items_${id}) __n.remove();`);
         lines.push(`  const __f = document.createDocumentFragment();`);
-        lines.push(`  for (const ${p.as} of (${listJS} ?? [])) buildItem_${id}(__f, ${p.as});`);
+        lines.push(`  for (const ${p.as} of (${listJS} ?? [])) ${filterJS ? `if (${filterJS}) ` : ''}buildItem_${id}(__f, ${p.as});`);
         lines.push(`  items_${id} = [...__f.childNodes];`);
         lines.push(`  anchor_${id}.parentNode.insertBefore(__f, anchor_${id});`);
         lines.push(`});`);
@@ -484,7 +503,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
 
   const parts: EmitParts = {
     screen, tokenCss, projectCss, data, sources, api: opts.api || {}, meta, queryUuids,
-    stateDecls, paramDecls, actionDecls, getDecls, effectDecls, componentDecls, storeImports, externImports, islandImports,
+    stateDecls, paramDecls, actionDecls, getDecls, effectDecls, componentDecls, storeImports, storeDecls: opts.storeCode || '', externImports, islandImports,
     renderBody, staticHtml: staticHtml ?? '', hasSlot,
   };
   if (opts.format === Fmt.Store) return emitStore(parts);

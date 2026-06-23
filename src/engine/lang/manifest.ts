@@ -100,8 +100,8 @@ export const PRIMITIVES: { [name: string]: Primitive } = {
     snippet: 'when ${1:cond} {\n\t$0\n}',
   },
   Each: {
-    props: { list: 'expr', as: 'ident' }, children: true, control: true,
-    doc: 'List render: `each <list> as <item> { ... }`. The item is a scope variable in the template.',
+    props: { list: 'expr', as: 'ident', filter: 'expr?' }, children: true, control: true,
+    doc: 'List render: `each <list> as <item> { ... }`. Filter with `where`: `each posts as p where p.published { ... }` renders only matching items (no leak). The item is a scope variable in the template.',
     snippet: 'each ${1:items} as ${2:item} {\n\t$0\n}',
   },
   Custom: {
@@ -124,7 +124,7 @@ export const MODIFIER_DOCS = {
   on: 'Custom component events wired to actions: `on(select: pick)`.',
 };
 
-export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'and', 'or', 'not', 'contains', 'use'];
+export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'where', 'and', 'or', 'not', 'contains', 'use'];
 export const KEYWORD_DOCS = {
   screen: 'Declares the screen name: `screen users_dashboard`.',
   entity: 'Declares a data shape + validation: `entity User { name text required  email email required  password text min:8 }` (implicit uuid id). Constraints: `required`, `min:N`, `max:N`.',
@@ -152,20 +152,22 @@ export const KEYWORD_DOCS = {
   query: 'An async data source. The state exposes `.loading`, `.error` and `.data`.',
   if: 'Conditional INSIDE an action body: `if <expr> { … } else { … }` — the only branching in actions (toggles, validation, add-or-remove).',
   when: 'Conditional render: `when <expr> { ... }`.',
-  each: 'List render: `each <list> as <item> { ... }`.',
+  each: 'List render: `each <list> as <item> { ... }`. Optional `where`: `each posts as p where p.published { ... }` renders only matching items.',
   as: 'Names the item variable in an `each`.',
+  where: 'Filters an `each` by a per-item condition: `each posts as p where p.published`. (Also the DataTable `where(...)` modifier.)',
   and: 'Logical AND.',
   or: 'Logical OR.',
   not: 'Logical NOT, e.g. `when not (cart.isEmpty)`.',
   contains: 'Case-insensitive substring match: `name contains @q`.',
 };
 
-export const ACTION_OPS = ['push', 'remove', 'reset', 'set', 'create', 'update', 'delete', 'refetch'];
+export const ACTION_OPS = ['push', 'remove', 'patch', 'reset', 'set', 'create', 'update', 'delete', 'refetch'];
 export const ACTION_OP_DOCS = {
-  push: 'Append to a list state: `users.push(draft)` (auto-fills uuid fields).',
+  push: 'Append to a list state: `users.push(draft)` or an inline object `users.push({ name: draft.name, role: "admin" })` (auto-fills uuid fields). Move/edit an item in place with `remove(x => x.id == c.id)` + `push({ id: c.id, …, field: newVal })`.',
   remove: 'Remove matching items locally: `users.remove(u => u.id == id)`.',
+  patch: 'Edit matching items IN PLACE (position-preserving): `todos.patch(t => t.id == id, { done: not t.done })`. Only list the fields that change. Use this to toggle/move/update an item instead of remove+push.',
   reset: 'Reset a state to its declared initial: `draft.reset()`.',
-  set: 'Set a state value: `rating.set(v)`.',
+  set: 'Set a state value: `rating.set(v)` or an entity draft to an inline object: `draft.set({ name: c.name })`.',
   create: 'POST an item to a source-backed list, then append the result: `orders.create(draft)`.',
   update: 'PUT an item (by id) to a source-backed list, then replace it: `orders.update(order)`.',
   delete: 'DELETE an item (by id) from a source-backed list, then drop it: `orders.delete(order)`.',

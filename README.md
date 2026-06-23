@@ -2,6 +2,9 @@
 <img width="157" height="157" alt="Group 21" src="https://github.com/user-attachments/assets/fe9a02e6-483d-4788-9286-142c1ddb7057" /> 
 <br/>
 
+## ALPHA - STILL ON DEVELOPMENT
+Muten is still under active development. We are currently in the alpha stage and are working on training models with Muten. Please keep in mind that improvements are being made gradually, and version 1.0 has not been released yet.
+
 An **AI-first** frontend framework. You write `.muten` files; muten compiles them to vanilla JS
 with fine-grained signals — **no virtual DOM, no framework runtime to ship**. The language is small,
 semantic and analyzable on purpose: an AI (or a person) can **locate and mutate** an app cheaply.
@@ -29,12 +32,40 @@ all three *by construction* — these are properties of how it compiles, not mar
 
 The trade is deliberate: a small, analyzable language an AI can hold in its head — not a general-purpose one it can't.
 
+## muten vs React / Vue / Svelte — the honest version
+
+They are general-purpose: they build *anything*, with huge ecosystems and a deep talent pool. That power has a
+price an AI (and your refactors) pay on every change — a large surface to keep in context (hooks, reactivity rules,
+lifecycle, the build graph), edits that ripple across components, and a runtime that ships to the browser. **For a
+human team building a big, bespoke product, that trade is usually worth it — use React/Vue/Svelte there.**
+
+muten makes the *opposite* trade on purpose, and it only wins on its own terms:
+
+- **The whole language fits in context** — no hooks-vs-effects, no re-render rules to reason about; far fewer ways
+  to be wrong.
+- **A compiler that answers before the browser does** — `muten check` validates every page (unknown ref, illegal
+  mutation, type mismatch, "did you mean…?") in milliseconds, no run. That loop is the single biggest reason
+  AI-written muten works on the *first* try more often.
+- **Small edit radius + app-as-data** — a change is a few lines in one file; `app.map.json` hands an agent the
+  whole app instead of a component tree to grep.
+- **Almost nothing ships** — no VDOM, no framework runtime (~2.8 KB gzip for a todo app vs 14–59 KB).
+
+**Where we're honest about the cost:** muten is small by design, so it can't express everything; the ecosystem is
+young, there is one maintainer, and it's pre-1.0. It shines when an **AI builds and maintains the app** and the app
+is the declarative 80% — CRUD, dashboards, catalogs, content, internal tools. It is **not** the right tool for a
+hand-crafted, highly-custom UI that needs the full React ecosystem, and it doesn't pretend to be. The honest rule of
+thumb: *let muten do the structure and the data; couple in other tech for the rest* (next section).
+
 ## Capabilities
 
 - **UI** — declarative primitives (layout, text, forms, tables, links), `when`/`each` control flow,
   `style()` layout tokens + `class()` look (toggle reactively: `class(active when isOpen)`), events on
   any element (`on(keydown: act)`).
 - **State** — local `state`, app-global `store`, derived `get`, `action`s with `if/else`; fine-grained signals.
+  A page `action` can **call a store action** (`cart.add(d)  draft.reset()`) — store + local work in one handler.
+- **Lists** — bounded, analyzable list operations (no raw `map`/`reduce`): inline objects (`list.push({ a: x })`),
+  in-place edit (`list.patch(x => x.id == id, { done: not x.done })`), filtered render (`each xs as x where cond`),
+  aggregates (`list.sum(x => x.price * x.qty)` · `count` · `avg` · `min` · `max`), and `sort`/`sortDesc(x => key)`.
 - **Data** — `query` states backed by `sources` (full HTTP: method, headers, body, nested `at`); one `api`
   block for base URL + auth (named clients for several backends); CRUD writes (`create`/`update`/`delete` —
   optimistic, with `.pending`/`.error`); `refetch(q: …, page: …)` for search/pagination; a `post`/`put`/`delete`
@@ -49,16 +80,18 @@ The trade is deliberate: a small, analyzable language an AI can hold in its head
 - **AI-native** — `lint == build`, one source of truth per concept, and the full language reference ships
   inside every scaffolded app under `.claude/` (an AGENTS guide + a Claude skill).
 
-## What a muten app can do — three tiers
+## How muten couples with the rest of the web — three tiers
 
-muten the *language* stays tiny on purpose; a muten *app* reaches the whole web platform through bounded,
-analyzable escapes. Reach for the **lowest tier that works**:
+muten the *language* stays tiny on purpose; a muten *app* reaches the whole web platform through **bounded,
+analyzable escapes**. The point: you never *fight* the language to do something it doesn't have — you drop to the
+right tier, and the compiler still checks the seam. Reach for the **lowest tier that works**:
 
 **1 · Pure muten** — the declarative 80%, zero extra deps: pages + routing (params, guards, shell, `/404`) ·
-`state`/`store`/`get` signals · `action`s with optimistic CRUD · `query` over REST `sources` (`refetch`,
-multi-backend) · `Form` from an entity (with validation) · `DataTable`, `when`/`each`, reactive
-`class(when …)`, `on(event: action)` · SSG + SEO. → a real **CRUD / SaaS / catalog / dashboard / content**
-app is *100% muten*.
+`state`/`store`/`get` signals · `action`s with `if/else`, optimistic CRUD, and **store-action composition** ·
+the **list toolkit** (inline objects · `patch` in-place edit · `each…where` filter · `sum`/`count`/`avg`/`min`/`max`
+aggregates · `sort`/`sortDesc`) · `query` over REST `sources` (`refetch`, multi-backend) · `Form` from an entity
+(text/number/email/bool/enum + validation) · `DataTable`, `when`/`each`, reactive `class(when …)`,
+`on(event: action)` · SSG + SEO. → a real **CRUD / SaaS / catalog / dashboard / content** app is *100% muten*.
 
 **2 · muten + the platform** — the web, *no framework runtime*: native HTML (`<input type="date">`,
 `<dialog>`, `<details>`) styled with `class()` · CSS component libs (Tailwind, DaisyUI) · **vanilla JS via
@@ -72,6 +105,15 @@ React-only lib) with no native/vanilla equivalent. Ships that framework's runtim
 
 > "Not expressible in pure muten" usually means **tier 2 (platform)**, rarely **tier 3 (React)** — and every
 > escape is *bounded* (the oracle still checks the border), so the language never grows into a UI kit.
+
+**The mechanism — and the honest caveat.** Each escape keeps the AI-first guarantee because the compiler still
+validates the *seam*: the `@state` props and `action` callbacks crossing into a `Custom`/island, and the call site
+of a `use` function (an undeclared one is a `check` error). So coupling in chart.js, zod, or a shadcn island never
+costs you the oracle on the muten side. The caveat to be clear about: a `use` function or an island ships real JS,
+and the standalone `muten build` (static HTML, for the pure-muten content) does **not** bundle it — those deploy
+through **`vite build`** (the same path the dev server runs). Rule of thumb: *pure-muten static content →
+`muten build`; the moment you add `use`/islands/shared cross-page state → a normal `vite build`.* The dev server
+(`npm run dev`) handles all tiers either way.
 
 ## The app, by convention
 
@@ -207,16 +249,20 @@ production system on it yet (small ecosystem, one maintainer, not yet battle-tes
 
 **Solid today:** the language + compiler, the `check` / `build` / `map` CLI + oracle, the Vite plugin + dev
 server + HMR, the VS Code extension (live-lint + autocomplete), Svelte & React islands, the reproducible benchmark.
+The bounded list toolkit — inline objects, `patch`, `each…where`, aggregates (`sum`/`count`/`avg`/`min`/`max`),
+`sort`/`sortDesc`, and page→store action composition — so a real CRUD/dashboard app is pure muten, no JS escape.
+`Form` fields cover `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select), with validation.
 
 **Experimental:** full island **SSR** — `muten build` server-renders an island's HTML (first paint + SEO),
 but client hydration of that island still needs its framework bundled (pair the SSG HTML with the Vite client build).
 
 **Next, toward 1.0:**
-- richer `Form` field types (`date` · `number` · `select` · `bool` · `textarea` · …) — completes the
-  entity→form model, so more is pure-muten with *no* library.
-- bounded aggregates in expressions (`sum` · `count`) — e.g. a cart total without an escape.
+- a `date`/`textarea` `Form` field type; number formatting (`round` / currency) in expressions.
 - keyed `each` (large-list perf); a live `source` (SSE / websocket) for real-time.
+- richer SSG for stateful multi-page apps (today a shared `.store` across pages deploys via `vite build`, not the
+  static `muten build`).
 
-**By design (the moat, not a bug):** muten is declarative + bounded — no loops / `map` / `reduce` in the DSL
-(use a `use` JS function), no widget primitives (use tier 2 / 3). The ceiling is what keeps it small and
-analyzable; closing it would just make another general-purpose framework.
+**By design (the moat, not a bug):** muten is declarative + bounded. The list toolkit (`patch` · `sort` · the
+aggregates · `each…where`) gives the *common* list jobs without exposing raw `map`/`reduce` — anything past that
+(an arbitrary transform) is a `use` JS function, and a real framework widget is a tier 2/3 escape. The ceiling is
+what keeps it small and analyzable; closing it would just make another general-purpose framework.

@@ -31,5 +31,5 @@ function flatten(tree: IRNode): { rootId: string; nodes: { [id: string]: FlatNod
 export function toDoc(ir: IR): Doc {
   // a .store slice has state + actions but no node tree → an empty node map.
   const { rootId, nodes } = ir.tree ? flatten(ir.tree) : { rootId: undefined, nodes: {} };
-  return { screen: ir.screen, entities: ir.entities, state: ir.state, actions: ir.actions, consts: ir.consts || {}, constraints: ir.constraints || {}, params: ir.params, meta: ir.meta, imports: ir.imports, rootId, nodes };
+  return { screen: ir.screen, entities: ir.entities, state: ir.state, actions: ir.actions, gets: ir.gets || {}, effects: ir.effects || [], consts: ir.consts || {}, constraints: ir.constraints || {}, params: ir.params, meta: ir.meta, imports: ir.imports, rootId, nodes };
 }

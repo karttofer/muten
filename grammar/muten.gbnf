@@ -29,7 +29,7 @@ stmt        ::= ifstmt | requeststmt | callstmt
 ifstmt      ::= "if" sp expr ws actionbody (ws "else" ws actionbody)?
 requeststmt ::= ("post" | "put" | "delete") sp string (sp "body" sp expr)?
 callstmt    ::= ident "." actionop "(" ws callargs ws ")"
-actionop    ::= "push" | "remove" | "reset" | "set" | "create" | "update" | "delete" | "refetch"
+actionop    ::= "push" | "remove" | "patch" | "reset" | "set" | "create" | "update" | "delete" | "refetch"
 callargs    ::= refetcharg (ws "," ws refetcharg)* | predarg | expr | ""
 refetcharg  ::= ident ws ":" ws expr
 predarg     ::= ident ws "=>" ws expr

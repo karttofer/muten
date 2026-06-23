@@ -41,7 +41,10 @@ export class Parser extends Grammar {
     super(source);
 
     this.modifiers = new Map([
-      [Mod.Bind, (props: NodeProps) => { props.bind = this.at(Tk.Ref) ? this.eat(Tk.Ref).v : this.parseDotted(); }], // @local or store field
+      [Mod.Bind, (props: NodeProps) => { // @local, or `@store.member` (the `@` sigil only captures the head — read the dotted tail too)
+        if (this.at(Tk.Ref)) { let b = this.eat(Tk.Ref).v; while (this.at(Tk.Punct, Pn.Dot)) { this.next(); b += '.' + this.eat(Tk.Ident).v; } props.bind = b; }
+        else props.bind = this.parseDotted();
+      }],
       [Mod.Submit, (props: NodeProps) => { props.submit = this.parseDotted(); }],
       [Mod.Where, (props: NodeProps) => { props.where = this.parseParenList(() => this.rebuildClause()); }],
       [Mod.Columns, (props: NodeProps) => { props.columns = this.parseParenList(() => this.eat(Tk.Ident).v); }],
@@ -61,6 +64,7 @@ export class Parser extends Grammar {
       [StOp.Set, (target: string): Stmt => ({ op: StOp.Set, target, arg: this.parseExpr() })],
       [StOp.Reset, (target: string): Stmt => ({ op: StOp.Reset, target })],
       [StOp.Remove, (target: string): Stmt => { const param = this.eat(Tk.Ident).v; this.eat(Tk.FatArrow); return { op: StOp.Remove, target, param, pred: this.parseExpr() }; }],
+      [StOp.Patch, (target: string): Stmt => { const param = this.eat(Tk.Ident).v; this.eat(Tk.FatArrow); const pred = this.parseExpr(); this.eat(Tk.Punct, Pn.Comma); return { op: StOp.Patch, target, param, pred, patch: this.parseExpr() }; }], // patch(x => pred, { field: val })
       [StOp.Create, (target: string): Stmt => ({ op: StOp.Create, target, arg: this.parseExpr() })], // POST to the source
       [StOp.Update, (target: string): Stmt => ({ op: StOp.Update, target, arg: this.parseExpr() })], // PUT /:id
       [StOp.Delete, (target: string): Stmt => ({ op: StOp.Delete, target, arg: this.parseExpr() })], // DELETE /:id
@@ -166,6 +170,7 @@ export class Parser extends Grammar {
       else if (this.at(Tk.String)) { initial = this.next().v; hasInitial = true; }
       else if (this.at(Tk.Number)) { initial = Number(this.next().v); hasInitial = true; }
       else if (this.at(Tk.Ident, Kw.True) || this.at(Tk.Ident, Kw.False)) { initial = this.next().v === Kw.True; hasInitial = true; }
+      else if (this.at(Tk.Ident, 'null')) { this.next(); hasInitial = true; }                    // `= null` → initial stays undefined → genState emits signal(null), NOT the string "null"
       else { initial = this.next().v; hasInitial = true; }                                       // a bare enum value
       this.eat(Tk.Punct, Pn.Colon);
       const type = this.parseType();
@@ -231,7 +236,12 @@ export class Parser extends Grammar {
     const method = this.eat(Tk.Ident).v;
     this.eat(Tk.Punct, Pn.ParenL);
     const build = this.statements.get(method);
-    if (!build) throw new ParseError(`unknown action method "${method}" on "${target}"`, this.locOf(this.peek().pos));
+    if (!build) { // not a built-in op → a store-action call `shop.add(draft)` (validate confirms target is a store)
+      const args: Expr[] = [];
+      while (!this.at(Tk.Punct, Pn.ParenR)) { args.push(this.parseExpr()); if (this.at(Tk.Punct, Pn.Comma)) this.next(); }
+      this.eat(Tk.Punct, Pn.ParenR);
+      return { op: StOp.Call, target, method, args };
+    }
     const stmt = build(target);
     this.eat(Tk.Punct, Pn.ParenR);
     return stmt;
@@ -361,7 +371,9 @@ export class Parser extends Grammar {
     const list = this.parseExpr();
     this.eat(Tk.Ident, Kw.As);
     const as = this.eat(Tk.Ident).v;
-    return { type: Nt.Each, props: { list, as }, children: this.parseChildren(), loc: this.locOf(head.pos) };
+    const props: NodeProps = { list, as };
+    if (this.at(Tk.Ident, Kw.Where)) { this.next(); props.filter = this.parseExpr(); } // `each x as i where cond` — render only matching items
+    return { type: Nt.Each, props, children: this.parseChildren(), loc: this.locOf(head.pos) };
   }
 
   // A primitive node: `Type <positionals> <modifiers> [ { children } ]`, or a part instance `Name(args)`.

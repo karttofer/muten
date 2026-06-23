@@ -36,7 +36,10 @@ export function parseClause(clause: string): { dynamic: boolean; expr: string } 
     throw new Error('unsupported where clause: ' + clause);
   }
   const dynamic = right.startsWith('@');
-  const valueExpr = dynamic ? `${right.slice(1)}.get()` : JSON.stringify(right);
+  // emit a static RHS with its natural JS type — `where(stock == 0)` must compare to the NUMBER 0, not "0"
+  // (JSON.stringify everything → `row.stock === "0"`, always false: the silent dead-filter bug).
+  const literal = (s: string): string => (/^-?\d+(?:\.\d+)?$/.test(s) ? s : s === 'true' || s === 'false' ? s : JSON.stringify(s));
+  const valueExpr = dynamic ? `${right.slice(1)}.get()` : literal(right);
   const field = JSON.stringify(left);
   const expr = op === 'eq'
     ? `row[${field}] === ${valueExpr}`
@@ -51,6 +54,8 @@ export function editableFields(entity: Entity): EditableField[] {
     if (type === 'uuid') continue;
     if (type.startsWith('enum:')) fields.push({ name, kind: Fk.Enum, options: type.slice(5).split('|') });
     else if (type === 'email') fields.push({ name, kind: Fk.Email });
+    else if (type === 'number') fields.push({ name, kind: Fk.Number });
+    else if (type === 'bool') fields.push({ name, kind: Fk.Bool });
     else fields.push({ name, kind: Fk.Text });
   }
   return fields;
