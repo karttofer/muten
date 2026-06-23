@@ -91,6 +91,31 @@ export function projectStores(filePath: string): string[] {
   return out;
 }
 
+// domain → its member names (state + gets + actions), so validate can allow `cart.count` refs
+// and page→store action composition (`cart.add(d)`). Mirrors projectStores' walk, but parses each store.
+export function projectStoreMembers(filePath: string): { [domain: string]: string[] } {
+  const appRoot = findAppRoot(filePath);
+  if (!appRoot) return {};
+  const out: { [domain: string]: string[] } = {};
+  const walk = (d: string): void => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = join(d, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith('.store')) {
+        const domain = e.name.slice(0, -'.store'.length);
+        try {
+          const ir = parse(fs.readFileSync(full, 'utf8'));
+          out[domain] = [...Object.keys(ir.state || {}), ...Object.keys(ir.gets || {}), ...Object.keys(ir.actions || {})];
+        } catch { out[domain] = []; }
+      }
+    }
+  };
+  walk(join(appRoot, 'src'));
+  return out;
+}
+
 export function projectParts(filePath: string): Parts {
   const appRoot = findAppRoot(filePath);
   if (!appRoot) return loadPartsLite(join(dirname(filePath), 'parts'));
@@ -132,7 +157,7 @@ export function analyze(filePath: string, text: string): ValidateResult {
   }
   const parts = projectParts(filePath);
   const { doc } = composeDoc(ir, parts); // resolve parts (typos survive → flagged) + hoist state → THE one doc builder
-  return validate(doc, { parts: Object.keys(parts), stores: projectStores(filePath), theme: projectTheme(filePath) });
+  return validate(doc, { parts: Object.keys(parts), stores: projectStores(filePath), storeMembers: projectStoreMembers(filePath), theme: projectTheme(filePath) });
 }
 
 // autocomplete context: the parts, state and actions this file knows within the WHOLE app

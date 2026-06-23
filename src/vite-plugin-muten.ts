@@ -142,7 +142,11 @@ if (root) {
       if (!id.endsWith('.muten')) return null;
       if (id.replace(/\\/g, '/').endsWith('/src/app.muten')) return { code: buildBoot(), map: null }; // the root IS the entry
       const loaded = await load(id, parts); // engine load() (parts gathered up front), not the hook above
-      const { ok, diagnostics } = validate(loaded.doc, { parts: loaded.partNames, stores: Object.keys(storesMeta), theme });
+      // storeMembers (domain → its state/get/action names) is what validate needs to allow `cart.count` refs AND
+      // page→store action composition (`cart.add(d)` in an action body). Without it, both are wrongly rejected.
+      const storeMembers: { [d: string]: string[] } = {};
+      for (const [d, m] of Object.entries(storesMeta)) storeMembers[d] = [...(m.state || []), ...(m.gets || []), ...(m.actions || [])];
+      const { ok, diagnostics } = validate(loaded.doc, { parts: loaded.partNames, stores: Object.keys(storesMeta), storeMembers, theme });
       if (!ok) throw new Error('muten: ' + diagnostics.map((d) => d.message).join(' · '));
 
       const customNames = [...new Set(Object.values(loaded.doc.nodes).filter((n) => n.type === Nt.Custom).map((n) => n.props?.component))];
