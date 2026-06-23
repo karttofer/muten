@@ -6,7 +6,7 @@
 Muten is still under active development. We are currently in the alpha stage and are working on training models with Muten. Please keep in mind that improvements are being made gradually, and version 1.0 has not been released yet.
 
 An **AI-first** frontend framework. You write `.muten` files; muten compiles them to vanilla JS
-with fine-grained signals — **no virtual DOM, no framework runtime to ship**. The language is small,
+with fine-grained signals - **no virtual DOM, no framework runtime to ship**. The language is small,
 semantic and analyzable on purpose: an AI (or a person) can **locate and mutate** an app cheaply.
 
 ```sh
@@ -14,106 +14,127 @@ npm create muten@latest my-app   # scaffold a new app (cross-platform: Windows +
 cd my-app && npm install && npm run dev
 ```
 
+## What a page looks like
+
+One file, declarative, no imports or boilerplate. This is the whole thing:
+
+```
+screen home
+
+entity Product {
+  name  text
+  price number
+}
+
+state {
+  products = [] : list<Product>
+  draft    = {} : Product
+}
+
+action add mutates products, draft <- p {
+  products.push({ name: p.name, price: p.price })   # build a record inline
+  draft.reset()                                     # then clear the form
+}
+
+Page style(column, gap.md) {
+  Form bind @draft submit add "Add product"
+
+  each products.sortDesc(p => p.price) as p {       # render the list, sorted
+    Text "{p.name} - ${p.price}"
+  }
+
+  Text "Total: ${products.sum(p => p.price)}"        # a live aggregate, no JS
+}
+```
+
+No `useState`, no component tree, no build wiring, and `muten check` validates every reference and type before
+it ever runs in a browser.
+
 ## Why muten
 
 For an AI the cost of working on a codebase is **context + mistakes + edit-radius**. muten is built to cut
-all three *by construction* — these are properties of how it compiles, not marketing:
+all three *by construction* - these are properties of how it compiles, not marketing:
 
-- **Almost nothing to ship** — no virtual DOM, no framework runtime. The *same* todo app, scaffolded by each
-  framework's official CLI and built, ships **~2.8 KB gzip** of JS in muten vs **~14 KB (Svelte) · ~24 KB (Vue)
-  · ~59 KB (React)** — **5–21× less** (a static page ships *zero*). Source is the most compact too (445 B), on
-  par with Svelte. *(Reproducible: the `bench/` folder + `node bench.mjs` in the source repo.)*
-- **A deterministic oracle** — `muten check --json` validates every page at compile time (unknown
-  state/action/part, bad style token, illegal mutation) in milliseconds, no browser — a feedback loop the
+- **Almost nothing to ship**: no virtual DOM, no framework runtime. The same todo app ships a small fraction of
+  the JS the big frameworks do, and a static page ships *zero*. (See the size table in *muten vs React / Vue /
+  Svelte* below.)
+- **A deterministic oracle**: `muten check --json` validates every page at compile time (unknown
+  state/action/part, bad style token, illegal mutation) in milliseconds, no browser - a feedback loop the
   others don't have. A *bounded* language is what makes that possible.
-- **The whole app as data** — `app.map.json` is a compact index of routes + structure an agent reads first,
+- **The whole app as data**: `app.map.json` is a compact index of routes + structure an agent reads first,
   instead of grepping a component tree.
-- **Small edit radius** — the UI is declarative, so a change is usually a few lines in one file.
+- **Small edit radius**: the UI is declarative, so a change is usually a few lines in one file.
 
-The trade is deliberate: a small, analyzable language an AI can hold in its head — not a general-purpose one it can't.
+The trade is deliberate: a small, analyzable language an AI can hold in its head, not a general-purpose one it can't.
 
-## muten vs React / Vue / Svelte — the honest version
+## muten vs React / Vue / Svelte - the honest version
 
-They are general-purpose: they build *anything*, with huge ecosystems and a deep talent pool. That power has a
-price an AI (and your refactors) pay on every change — a large surface to keep in context (hooks, reactivity rules,
-lifecycle, the build graph), edits that ripple across components, and a runtime that ships to the browser. **For a
-human team building a big, bespoke product, that trade is usually worth it — use React/Vue/Svelte there.**
+They are general-purpose: they build *anything*, with mature ecosystems and a deep talent pool. **For a human team
+building a big, bespoke product, that is usually the right call.** muten makes the opposite trade on purpose, and it
+only wins on its own terms:
 
-muten makes the *opposite* trade on purpose, and it only wins on its own terms:
+| | muten | React / Vue / Svelte |
+|---|---|---|
+| **Best for** | an **AI** builds & maintains it; the declarative 80% (CRUD, dashboards, content, internal tools) | human teams, large bespoke UIs |
+| **Language surface** | small - the whole thing fits in an AI's context | large (hooks, lifecycle, reactivity rules) |
+| **Catches mistakes** | `muten check` - at **compile time**, in milliseconds, no browser | at runtime / in tests |
+| **A typical change** | a few lines in one file | ripples across components |
+| **Ships to the browser** | ~2.8 KB gzip for a todo app - a static page ships **zero** | 14-59 KB of runtime + your app |
+| **Ecosystem / maturity** | young · one maintainer · **pre-1.0** | mature · huge |
 
-- **The whole language fits in context** — no hooks-vs-effects, no re-render rules to reason about; far fewer ways
-  to be wrong.
-- **A compiler that answers before the browser does** — `muten check` validates every page (unknown ref, illegal
-  mutation, type mismatch, "did you mean…?") in milliseconds, no run. That loop is the single biggest reason
-  AI-written muten works on the *first* try more often.
-- **Small edit radius + app-as-data** — a change is a few lines in one file; `app.map.json` hands an agent the
-  whole app instead of a component tree to grep.
-- **Almost nothing ships** — no VDOM, no framework runtime (~2.8 KB gzip for a todo app vs 14–59 KB).
+The single biggest reason AI-written muten works on the *first* try more often is that middle row: **a compiler that
+answers before the browser does.**
 
-**Where we're honest about the cost:** muten is small by design, so it can't express everything; the ecosystem is
-young, there is one maintainer, and it's pre-1.0. It shines when an **AI builds and maintains the app** and the app
-is the declarative 80% — CRUD, dashboards, catalogs, content, internal tools. It is **not** the right tool for a
-hand-crafted, highly-custom UI that needs the full React ecosystem, and it doesn't pretend to be. The honest rule of
-thumb: *let muten do the structure and the data; couple in other tech for the rest* (next section).
+**The honest cost:** muten is small by design, so it can't express everything. It shines when an **AI builds and
+maintains the app** and the app is the declarative 80%. It is **not** the tool for a hand-crafted, highly-custom UI
+that needs the full React ecosystem, and it doesn't pretend to be.
+
+> **Rule of thumb:** let muten do the structure and the data; couple in other tech for the rest (next section).
 
 ## Capabilities
 
-- **UI** — declarative primitives (layout, text, forms, tables, links), `when`/`each` control flow,
-  `style()` layout tokens + `class()` look (toggle reactively: `class(active when isOpen)`), events on
-  any element (`on(keydown: act)`).
-- **State** — local `state`, app-global `store`, derived `get`, `action`s with `if/else`; fine-grained signals.
-  A page `action` can **call a store action** (`cart.add(d)  draft.reset()`) — store + local work in one handler.
-- **Lists** — bounded, analyzable list operations (no raw `map`/`reduce`): inline objects (`list.push({ a: x })`),
-  in-place edit (`list.patch(x => x.id == id, { done: not x.done })`), filtered render (`each xs as x where cond`),
-  aggregates (`list.sum(x => x.price * x.qty)` · `count` · `avg` · `min` · `max`), and `sort`/`sortDesc(x => key)`.
-- **Data** — `query` states backed by `sources` (full HTTP: method, headers, body, nested `at`); one `api`
-  block for base URL + auth (named clients for several backends); CRUD writes (`create`/`update`/`delete` —
-  optimistic, with `.pending`/`.error`); `refetch(q: …, page: …)` for search/pagination; a `post`/`put`/`delete`
-  escape for non-REST APIs.
-- **Routing** — real-path URLs, params (`/product/:id` → `param id`), guards, a `/404` catch-all.
-- **SEO / SSR** — `muten build` pre-renders every route to real HTML (static pages ship zero JS; data-driven
-  pages are fetched at build), with per-page `meta { title … description … }` (`og:*` auto-derived).
-- **Interop, lowest-tier first** — style native HTML + CSS libs with `class()`; mount **vanilla JS** libs
-  (charts, maps, date-pickers) via `Custom`; pull JS logic into expressions with `use fmt from "./lib.ts"`;
-  and only when you need a real **Svelte/React** component (e.g. shadcn) reach for an **island**
-  (`use X from "react:./X.jsx"` — code-split, lazy `client:visible`). See *Three tiers* below.
-- **AI-native** — `lint == build`, one source of truth per concept, and the full language reference ships
-  inside every scaffolded app under `.claude/` (an AGENTS guide + a Claude skill).
+| Area | What you get |
+|---|---|
+| **UI** | declarative primitives (layout, text, forms, tables, links) · `when`/`each` control flow · `style()` layout tokens + `class()` look (reactive: `class(active when isOpen)`) · `on(event: action)` on any element |
+| **State** | local `state` · app-global `store` · derived `get` · `action`s with `if/else` · fine-grained signals. A page action can **call a store action** (`cart.add(d)  draft.reset()`): store + local work in one handler |
+| **Lists** | bounded ops, no raw `map`/`reduce`: inline objects (`push({…})`) · in-place `patch` · filtered `each…where` · aggregates `sum`/`count`/`avg`/`min`/`max` · `sort`/`sortDesc` |
+| **Forms** | a `Form` auto-built from an entity, one input per field: `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select), with built-in validation |
+| **Data** | `query` states over `sources` (full HTTP: method, headers, body, nested `at`) · one `api` block (named multi-backend clients) · optimistic CRUD (`create`/`update`/`delete` + `.pending`/`.error`) · `refetch(q: …, page: …)` · a `post`/`put`/`delete` escape for non-REST |
+| **Routing** | real-path URLs · params (`/product/:id` → `param id`) · route guards · a `/404` catch-all |
+| **SEO / SSR** | `muten build` pre-renders every route to real HTML (static pages ship zero JS; data pages fetched at build) · per-page `meta { title … description … }` with `og:*` auto-derived |
+| **Interop** (lowest tier first) | `class()` for native HTML + CSS libs · `Custom` for vanilla-JS libs (charts, maps, pickers) · `use fmt from "./lib.ts"` for JS logic · Svelte/React **islands** for a real framework component |
+| **AI-native** | `lint == build` · one source of truth per concept · the full language reference ships in every scaffolded app under `.claude/` (an AGENTS guide + a Claude skill) |
 
-## How muten couples with the rest of the web — three tiers
+## How muten couples with the rest of the web - three tiers
 
 muten the *language* stays tiny on purpose; a muten *app* reaches the whole web platform through **bounded,
-analyzable escapes**. The point: you never *fight* the language to do something it doesn't have — you drop to the
+analyzable escapes**. The point: you never *fight* the language to do something it doesn't have, you drop to the
 right tier, and the compiler still checks the seam. Reach for the **lowest tier that works**:
 
-**1 · Pure muten** — the declarative 80%, zero extra deps: pages + routing (params, guards, shell, `/404`) ·
-`state`/`store`/`get` signals · `action`s with `if/else`, optimistic CRUD, and **store-action composition** ·
-the **list toolkit** (inline objects · `patch` in-place edit · `each…where` filter · `sum`/`count`/`avg`/`min`/`max`
-aggregates · `sort`/`sortDesc`) · `query` over REST `sources` (`refetch`, multi-backend) · `Form` from an entity
-(text/number/email/bool/enum + validation) · `DataTable`, `when`/`each`, reactive `class(when …)`,
-`on(event: action)` · SSG + SEO. → a real **CRUD / SaaS / catalog / dashboard / content** app is *100% muten*.
+| Tier | What it reaches | Typical examples | The trade |
+|---|---|---|---|
+| **1 · Pure muten** | the declarative 80% - pages, routing (params, guards, `/404`), `state`/`store`/`get`, the **list toolkit**, `Form` (+validation), `query` over REST, SSG + SEO | a whole **CRUD / SaaS / catalog / dashboard / content** app | **zero extra deps** |
+| **2 · muten + the platform** | native HTML + CSS libs via `class()`, **vanilla JS via `Custom`**, JS logic via `use … from "./lib.ts"` | `<dialog>`, Tailwind/DaisyUI, chart.js, Leaflet, flatpickr, Quill, zod, date-fns | a JS dep - **no framework runtime** |
+| **3 · Svelte / React island** | a real framework component used as a node - props ↓, events ↑ | **shadcn/ui**, a React-only lib (no native/vanilla equivalent) | ships that framework's runtime (lazy, code-split) |
 
-**2 · muten + the platform** — the web, *no framework runtime*: native HTML (`<input type="date">`,
-`<dialog>`, `<details>`) styled with `class()` · CSS component libs (Tailwind, DaisyUI) · **vanilla JS via
-`Custom`** (charts → chart.js, maps → Leaflet, date-picker → flatpickr, rich-text → Quill, drag-drop →
-SortableJS, grids → Tabulator) · web components · `use fmt from "./lib.ts"` for any JS logic (zod, date-fns).
-→ almost every "hard widget" lands here, **without React**.
+Almost every "hard widget" lands at **tier 2, without React**; tier 3 is the narrow last resort, not the default.
 
-**3 · Svelte / React island** — only when the component *is* a framework component (e.g. **shadcn/ui**, a
-React-only lib) with no native/vanilla equivalent. Ships that framework's runtime (lazy, code-split via
-`client:visible`); props ↓ + events ↑ wire it to muten state. The narrow last resort, not the default.
+> "Not expressible in pure muten" usually means **tier 2 (platform)**, rarely **tier 3 (a framework component)** -
+> and every escape is *bounded*: the oracle still checks the border, so the language never grows into a UI kit.
 
-> "Not expressible in pure muten" usually means **tier 2 (platform)**, rarely **tier 3 (React)** — and every
-> escape is *bounded* (the oracle still checks the border), so the language never grows into a UI kit.
+**Why the escapes stay safe.** The compiler validates the *seam* - the `@state` props and `action` callbacks
+crossing into a `Custom`/island, and the call site of a `use` function (an undeclared one is a `check` error). So
+coupling in chart.js, zod, or a shadcn island never costs you the oracle on the muten side.
 
-**The mechanism — and the honest caveat.** Each escape keeps the AI-first guarantee because the compiler still
-validates the *seam*: the `@state` props and `action` callbacks crossing into a `Custom`/island, and the call site
-of a `use` function (an undeclared one is a `check` error). So coupling in chart.js, zod, or a shadcn island never
-costs you the oracle on the muten side. The caveat to be clear about: a `use` function or an island ships real JS,
-and the standalone `muten build` (static HTML, for the pure-muten content) does **not** bundle it — those deploy
-through **`vite build`** (the same path the dev server runs). Rule of thumb: *pure-muten static content →
-`muten build`; the moment you add `use`/islands/shared cross-page state → a normal `vite build`.* The dev server
-(`npm run dev`) handles all tiers either way.
+**Deploy - the honest caveat.** A `use` function or an island ships real JS that the static `muten build` does
+**not** bundle:
+
+| Your app uses… | Deploy with |
+|---|---|
+| Pure muten, static content | `muten build` (zero-JS HTML) - or `vite build` |
+| `use` JS functions, islands, or shared cross-page state | **`vite build`** (it bundles them; the static build doesn't) |
+
+`npm run dev` runs every tier regardless - this only affects the production *build*.
 
 ## The app, by convention
 
@@ -141,9 +162,9 @@ routes {
 
 ```sh
 muten build [dir]            # compile → ./dist/<route>/index.html (+ app.map.json)
-muten check [dir] [--json]   # parse + validate every page, no compile — the deterministic ORACLE
+muten check [dir] [--json]   # parse + validate every page, no compile - the deterministic ORACLE
                              #   --json → structured diagnostics (code + loc + "did you mean…?") in ms, no browser
-muten map   [dir] [--json]   # emit app.map.json COLD (no build) — the app graph an AI reads FIRST
+muten map   [dir] [--json]   # emit app.map.json COLD (no build) - the app graph an AI reads FIRST
 ```
 
 `check` and `map` are the AI-first feedback loop: an agent asks the compiler "is this valid, and what
@@ -182,7 +203,7 @@ The compiler is a straight pipeline of small, single-purpose stages:
 .muten ─[lang]→ IR ─[ir: compose]→ tree ─[ir: flatten]→ Doc ─[ir: validate]→ ✓ ─[compile]→ JS
 ```
 
-The source is TypeScript under `src/`, organized by **domain** — each has its own README:
+The source is TypeScript under `src/`, organized by **domain**: each has its own README:
 
 | Domain | Role |
 |---|---|
@@ -200,7 +221,7 @@ file-level conventions (≤500 lines, honest types, data-table dispatch, no magi
 ## Build
 
 `npm run build` = `tsc` (strict type-check) + `esbuild` → `dist/**/*.js`, **minified, per-file**
-(modules preserved, so nothing bundles into a heavy monolith). `dist/` is generated — edit `src/`.
+(modules preserved, so nothing bundles into a heavy monolith). `dist/` is generated - edit `src/`.
 
 ## Styling & escape hatch
 
@@ -208,7 +229,7 @@ muten imposes no theme. A page lays itself out with `style(…)` tokens (analyza
 `theme.muten`) and skins itself via `class("…")` (your CSS / Tailwind / anything). For behavior the
 primitives can't express, drop to a `Custom` component (`src/components/<Name>.js`).
 
-## Islands — Svelte & React
+## Islands - Svelte & React
 
 When a page needs a genuinely interactive widget or a framework UI lib muten can't express, mount a real
 Svelte/React component as an **island**. The `svelte:` / `react:` prefix on `use … from` is the only marker;
@@ -231,7 +252,7 @@ Page style(padding.xl, gap.md) {
 ```
 
 `prop: @state` sends a value **down** (a React island re-renders when the signal changes; Svelte mounts once);
-`onX: action` sends a callback that fires a muten action — that's how an island writes **back** to muten state.
+`onX: action` sends a callback that fires a muten action - that's how an island writes **back** to muten state.
 No `client:` directive = hydrate on load. Add the framework's Vite plugin next to `muten()`:
 
 ```js
@@ -244,16 +265,16 @@ export default { plugins: [muten(), svelte(), react()] };
 
 ## Status & roadmap (honest)
 
-**Pre-1.0 — the core is solid, the edges are young.** Build real apps with it; don't bet a critical
+**Pre-1.0 - the core is solid, the edges are young.** Build real apps with it; don't bet a critical
 production system on it yet (small ecosystem, one maintainer, not yet battle-tested).
 
 **Solid today:** the language + compiler, the `check` / `build` / `map` CLI + oracle, the Vite plugin + dev
-server + HMR, the VS Code extension (live-lint + autocomplete), Svelte & React islands, the reproducible benchmark.
-The bounded list toolkit — inline objects, `patch`, `each…where`, aggregates (`sum`/`count`/`avg`/`min`/`max`),
-`sort`/`sortDesc`, and page→store action composition — so a real CRUD/dashboard app is pure muten, no JS escape.
+server + HMR, the VS Code extension (live-lint + autocomplete), Svelte & React islands.
+The bounded list toolkit - inline objects, `patch`, `each…where`, aggregates (`sum`/`count`/`avg`/`min`/`max`),
+`sort`/`sortDesc`, and page→store action composition, so a real CRUD/dashboard app is pure muten, no JS escape.
 `Form` fields cover `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select), with validation.
 
-**Experimental:** full island **SSR** — `muten build` server-renders an island's HTML (first paint + SEO),
+**Experimental:** full island **SSR**: `muten build` server-renders an island's HTML (first paint + SEO),
 but client hydration of that island still needs its framework bundled (pair the SSG HTML with the Vite client build).
 
 **Next, toward 1.0:**
@@ -263,6 +284,6 @@ but client hydration of that island still needs its framework bundled (pair the 
   static `muten build`).
 
 **By design (the moat, not a bug):** muten is declarative + bounded. The list toolkit (`patch` · `sort` · the
-aggregates · `each…where`) gives the *common* list jobs without exposing raw `map`/`reduce` — anything past that
+aggregates · `each…where`) gives the *common* list jobs without exposing raw `map`/`reduce` - anything past that
 (an arbitrary transform) is a `use` JS function, and a real framework widget is a tier 2/3 escape. The ceiling is
 what keeps it small and analyzable; closing it would just make another general-purpose framework.
