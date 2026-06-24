@@ -1,11 +1,7 @@
-// ============================================================================
-// Logic — the non-DOM half of the compiler
-// ============================================================================
-// Everything that turns the IR's *behaviour* into JavaScript: reference resolution, expressions,
-// action statements, and the state / action / effect declarations. It emits NO DOM — that is
-// compile.ts. Both halves share one `CompileCtx` (the resolved state/stores/consts of a single
-// screen), so `usedStores` is literally the SAME Set: whatever a ref or action reaches here,
-// compile.ts turns into an `import` for that store domain.
+// logic.ts: the behaviour half of the compiler (no DOM).
+// Turns IR state/actions/effects into JS: reference resolution, expressions, action statements,
+// and state/action/effect declarations. Shares one CompileCtx with compile.ts, so usedStores
+// collected here becomes store imports there. Consumed by compile.ts only.
 
 import { Ek, StOp, BOp, UOp, Fmt } from '#engine/shared/vocab.js';
 import { JS_BINOP } from '#engine/compile/helpers.js';
@@ -14,7 +10,7 @@ import type { CompileCtx, Expr, Stmt, Scope, Value, ValueObject } from '#engine/
 export class Logic {
   constructor(private readonly ctx: CompileCtx) {}
 
-  // ── reference resolution ───────────────────────────────────────────────────
+  // ── reference resolution ──────────────────────────────────────────────────
 
   // is `member` a `kind` member (state | gets | actions) of the store domain `d`?
   private inStore(d: string, member: string, kind: 'state' | 'gets' | 'actions'): boolean {
@@ -22,8 +18,8 @@ export class Logic {
     return !!slice && (slice[kind] || []).includes(member);
   }
 
-  // an action name → its callable. A store action `cart.add` → `__store_cart.add` (and the domain is
-  // marked used); a local action stays as written; a missing name (no `->`) compiles to nothing.
+  // action name -> its callable. Store action `cart.add` -> `__store_cart.add` (domain marked used);
+  // local action stays as written; missing name compiles to nothing.
   actionRef(name: string | undefined): string {
     if (!name) return '';
     const [domain, member] = name.split('.');
@@ -31,8 +27,8 @@ export class Logic {
     return name;
   }
 
-  // a bind/data target → its signal name. `@local` → `local`; a store field `cart.query` →
-  // `__store_cart.query`. (validate has already guaranteed the bind exists.)
+  // bind/data target -> signal name. `@local` -> `local`; `cart.query` -> `__store_cart.query`.
+  // validate has already guaranteed the bind exists.
   bindSig(ref: string | undefined): string {
     if (typeof ref !== 'string') return '';
     if (ref.startsWith('@')) return ref.slice(1);
@@ -41,14 +37,14 @@ export class Logic {
     return ref;
   }
 
-  // the uuid fields of an entity (each gets a fresh id when an item is pushed onto a list<Entity>).
+  // uuid fields of an entity: auto-filled whenever an item is pushed onto a list<Entity>.
   uuidFields(entityName: string): string[] {
     const entity = this.ctx.entities[entityName] || {};
     return Object.entries(entity).filter(([, type]) => type === 'uuid').map(([field]) => field);
   }
 
-  // the bare-referenceable fields of `<list>`'s element (for a `where` filter's item-implicit scope).
-  // `tasks : list<Task>` → { id, ...Task fields }; a non-entity element (list<uuid>) → just `id`.
+  // bare-referenceable fields of `<list>`'s element, for a `where` filter's item-implicit scope.
+  // `tasks : list<Task>` -> { id, ...Task fields }; non-entity element (list<uuid>) -> just `id`.
   private itemFields(list: string): Set<string> {
     const type = this.ctx.state[list.split('.')[0]]?.type || '';
     const elem = type.startsWith('list<') ? type.slice(5, -1) : '';
@@ -56,60 +52,59 @@ export class Logic {
     return new Set(['id', ...(entity ? Object.keys(entity) : [])]);
   }
 
-  // does a body contain a server write (create/update/delete)? — recursing into if-branches.
+  // does the body contain a server write (create/update/delete)? recurses into if-branches.
   private bodyHasWrite(body: Stmt[]): boolean {
     return body.some((st) => st.op === StOp.Create || st.op === StOp.Update || st.op === StOp.Delete || st.op === StOp.Request
       || (st.op === StOp.If && (this.bodyHasWrite(st.then || []) || this.bodyHasWrite(st.else || []))));
   }
-  // actions that write → they become async and expose live `.pending` / `.error` signals. Memoized.
+  // write actions become async and expose live `.pending` / `.error` signals. Memoized.
   private writeActionsSet: Set<string> | null = null;
   private writeActions(): Set<string> {
     if (!this.writeActionsSet) this.writeActionsSet = new Set(Object.entries(this.ctx.actions).filter(([, a]) => this.bodyHasWrite(a.body || [])).map(([n]) => n));
     return this.writeActionsSet;
   }
 
-  // resolve a dotted reference to runtime JS, honouring scope:
-  //   a lambda local stays bare · a query reads `.data` (or `.loading`/`.error`) · a local state
-  //   reads `.get()` · a store member reads through its module · a const inlines · else it is an
-  //   action input parameter passed straight through.
+  // dotted reference -> runtime JS, honouring scope:
+  // where/by item field stays bare; query reads `.data` (or `.loading`/`.error`); local state reads `.get()`;
+  // store member reads through its module; const inlines; else passes through as an action param.
   resolveRef(name: string, scope: Scope): string {
     const [head, ...rest] = name.split('.');
     const tail = rest.length ? '.' + rest.join('.') : '';
-    if (scope.sigLocals?.has(head)) return `${head}.get()${tail}`;   // keyed-each row: a per-row signal, so its bindings react to the row's data
+    if (scope.sigLocals?.has(head)) return `${head}.get()${tail}`;   // keyed-each row signal: bindings react to the row's data
     if (scope.locals.has(head)) return head + tail;
-    if (scope.item?.fields.has(head)) return `${scope.item.var}.${name}`;   // `<list> where <cond>`: a bare field of the item → read it off the row
+    if (scope.item?.fields.has(head)) return `${scope.item.var}.${name}`;   // `<list> where <cond>`: bare field of the item, read off the row
 
-    if (this.ctx.params.has(head)) return head + tail;        // a route param: a local string injected at mount
+    if (this.ctx.params.has(head)) return head + tail;        // route param: local string injected at mount
     if (this.ctx.queryStates.has(head)) {
-      if (rest[0] === 'loading' || rest[0] === 'error' || rest[0] === 'data') return `${head}.get()${tail}`; // .data/.loading/.error ARE the signal's fields — don't double the .data
-      return `${head}.get().data${tail}`;                 // @users → the data array; @users.length → its length
+      if (rest[0] === 'loading' || rest[0] === 'error' || rest[0] === 'data') return `${head}.get()${tail}`; // .loading/.error/.data are the signal's own fields, no double .data
+      return `${head}.get().data${tail}`;                 // @users -> data array; @users.length -> its length
     }
     if (this.ctx.stateKeys.has(head)) return `${head}.get()` + tail;
-    if (this.ctx.gets[head] !== undefined) return `${head}.get()` + tail; // a `get` derived value is a computed signal — read like state
+    if (this.ctx.gets[head] !== undefined) return `${head}.get()` + tail; // `get` is a computed signal, read like state
     if (this.ctx.stores[head]) {
       const member = rest[0];
       const more = rest.length > 1 ? '.' + rest.slice(1).join('.') : '';
       if (this.inStore(head, member, 'state') || this.inStore(head, member, 'gets')) { this.ctx.usedStores.add(head); return `__store_${head}.${member}.get()${more}`; }
     }
-    if (this.ctx.consts[head] !== undefined) return JSON.stringify(rest.length ? null : this.ctx.consts[head]); // scalar const, inlined
-    if (this.writeActions().has(head) && (rest[0] === 'pending' || rest[0] === 'error')) { // a write action's live status
+    if (this.ctx.consts[head] !== undefined) return JSON.stringify(rest.length ? null : this.ctx.consts[head]); // scalar const: inlined
+    if (this.writeActions().has(head) && (rest[0] === 'pending' || rest[0] === 'error')) { // write action's live status
       return `${rest[0] === 'pending' ? '__pending_' : '__error_'}${head}.get()`;
     }
-    return head + tail;                                    // an action input parameter (e.g. id)
+    return head + tail;                                    // action input parameter (e.g. id)
   }
 
-  // ── expressions ────────────────────────────────────────────────────────────
+  // ── expressions ──────────────────────────────────────────────────────────
 
-  // an expression AST → a JS expression string (recursive; precedence is already baked into the tree).
+  // expression AST -> JS string. Recursive; precedence is baked into the tree.
   compileExpr(node: Expr, scope: Scope): string {
     if (node.kind === Ek.Lit) return JSON.stringify(node.value);
     if (node.kind === Ek.Ref) return this.resolveRef(node.name, scope);
-    if (node.kind === Ek.Call) return `${node.fn}(${node.args.map((a) => this.compileExpr(a, scope)).join(', ')})`; // a use'd JS function
+    if (node.kind === Ek.Call) return `${node.fn}(${node.args.map((a) => this.compileExpr(a, scope)).join(', ')})`; // use'd JS function
     if (node.kind === Ek.Obj) return `{ ${node.fields.map((f) => `${JSON.stringify(f.key)}: ${this.compileExpr(f.value, scope)}`).join(', ')} }`; // inline object literal
-    if (node.kind === Ek.Agg) { // `list.sum by expr` / `list.count where cond` → reduce/filter; item fields read bare off `__it` (item-implicit)
+    if (node.kind === Ek.Agg) { // `list.sum by expr` / `list.count where cond` -> reduce/filter; item fields read bare off `__it`
       const list = `(${this.resolveRef(node.list, scope)} ?? [])`;
       const body = this.compileExpr(node.body, { ...scope, item: { var: '__it', fields: this.itemFields(node.list) } });
-      if (node.op === 'sort' || node.op === 'sortDesc') { // sort a COPY by the projected key (no mutation of the source signal)
+      if (node.op === 'sort' || node.op === 'sortDesc') { // sort a copy by projected key (no mutation of the source signal)
         const dir = node.op === 'sortDesc' ? -1 : 1;
         const key = `((__it) => ${body})`;
         return `[...${list}].sort((__a, __b) => { const __ka = ${key}(__a), __kb = ${key}(__b); return (__ka < __kb ? -1 : __ka > __kb ? 1 : 0) * ${dir}; })`;
@@ -118,11 +113,11 @@ export class Logic {
       if (node.op === 'count') return `${list}.filter((__it) => ${body}).length`;
       if (node.op === 'sum') return reduce('0', `__a + (${body})`);
       if (node.op === 'avg') return `(${reduce('0', `__a + (${body})`)} / (${list}.length || 1))`;
-      // min/max guard the empty list → 0 (not ±Infinity, which would render as garbage)
+      // min/max guard the empty list: return 0, not ±Infinity (which renders as garbage)
       if (node.op === 'min') return `(${list}.length ? ${reduce('Infinity', `Math.min(__a, ${body})`)} : 0)`;
-      return `(${list}.length ? ${reduce('-Infinity', `Math.max(__a, ${body})`)} : 0)`; // max
+      return `(${list}.length ? ${reduce('-Infinity', `Math.max(__a, ${body})`)} : 0)`; // max: same empty-list guard
     }
-    if (node.kind === Ek.Filter) { // derived list `<list> where <cond>` → filter a COPY; bare fields read off the row (item-implicit, like each-where)
+    if (node.kind === Ek.Filter) { // derived list `<list> where <cond>` -> filter a copy; bare fields off the row (item-implicit)
       const list = `[...(${this.resolveRef(node.list, scope)} ?? [])]`;
       const cond = this.compileExpr(node.cond, { ...scope, item: { var: '__it', fields: this.itemFields(node.list) } });
       return `${list}.filter((__it) => ${cond})`;
@@ -135,7 +130,7 @@ export class Logic {
     if (node.kind === Ek.Bin) {
       const left = this.compileExpr(node.left, scope);
       const right = this.compileExpr(node.right, scope);
-      if (node.op === BOp.Contains) return `__has(${left}, ${right})`; // list membership OR substring
+      if (node.op === BOp.Contains) return `__has(${left}, ${right})`; // list membership or substring
       const js = JS_BINOP[node.op];
       if (js) return `(${left} ${js} ${right})`;
       throw new Error('unsupported operator: ' + node.op);
@@ -143,107 +138,126 @@ export class Logic {
     throw new Error('unsupported expression');
   }
 
-  // ── action statements ──────────────────────────────────────────────────────
+  // ── action statements ─────────────────────────────────────────────────────
 
-  // one mutation statement (in an action body or a .store effect) → JS line(s). `if` recurses.
+  // one mutation statement (action body or .store effect) -> JS line(s). `if` recurses.
   stmtLines(st: Stmt, scope: Scope, isAsync = false): string[] {
     const ctx = this.ctx;
     const out: string[] = [];
-    if (st.op === StOp.If) {
-      out.push(`if (${this.compileExpr(st.cond, scope)}) {`);
-      for (const s of st.then || []) for (const l of this.stmtLines(s, scope, isAsync)) out.push('  ' + l);
-      if (st.else) { out.push('} else {'); for (const s of st.else) for (const l of this.stmtLines(s, scope, isAsync)) out.push('  ' + l); }
-      out.push('}');
-      return out;
-    }
-    if (st.op === StOp.Reset) {
-      out.push(`${st.target}.set(${JSON.stringify(ctx.state[st.target].initial ?? null)});`);
-    } else if (st.op === StOp.Toggle) {
-      out.push(`${st.target}.set(!${st.target}.get());`); // flip a bool
-    } else if (st.op === StOp.Set) {
-      out.push(`${st.target}.set(${this.compileExpr(st.arg, scope)});`);
-    } else if (st.op === StOp.Push) {
-      const elem = (ctx.state[st.target].type.match(/^list<(.+)>$/) || [])[1];
-      const isEntity = elem && ctx.entities[elem]; // list<User> → entity; list<uuid>/list → scalar
-      // a query-backed target carries { data, loading, error }, so we splice into `.data`, not the signal.
-      const wrap = (value: string): string => ctx.queryStates.has(st.target)
-        ? `${st.target}.set({ ...${st.target}.get(), data: [...${st.target}.get().data, ${value}] });`
-        : `${st.target}.set([...${st.target}.get(), ${value}]);`;
-      if (isEntity) { // entity list: copy the item + auto-fill any uuid fields
-        out.push(`{ const __it = { ...${this.compileExpr(st.arg, scope)} };`);
-        for (const field of this.uuidFields(elem)) out.push(`  if (__it.${field} === null || __it.${field} === undefined) __it.${field} = __id(); // auto uuid`);
-        out.push(`  ${wrap('__it')} }`);
-      } else { // scalar list (ids, numbers…): push the value as-is
-        out.push(`${wrap(this.compileExpr(st.arg, scope))}`);
+    switch (st.op) {
+      case StOp.If: {
+        out.push(`if (${this.compileExpr(st.cond, scope)}) {`);
+        for (const s of st.then || []) for (const l of this.stmtLines(s, scope, isAsync)) out.push('  ' + l);
+        if (st.else) { out.push('} else {'); for (const s of st.else) for (const l of this.stmtLines(s, scope, isAsync)) out.push('  ' + l); }
+        out.push('}');
+        break;
       }
-    } else if (st.op === StOp.Remove) {
-      const inner: Scope = { ...scope, item: { var: '__it', fields: this.itemFields(st.target) } }; // `remove where …` — bare fields off __it
-      const pred = this.compileExpr(st.pred, inner);
-      out.push(ctx.queryStates.has(st.target)
-        ? `${st.target}.set({ ...${st.target}.get(), data: ${st.target}.get().data.filter((__it) => !(${pred})) });`
-        : `${st.target}.set(${st.target}.get().filter((__it) => !(${pred})));`);
-    } else if (st.op === StOp.Patch) {
-      // in-place edit: map the list, merging the patch object into items the predicate matches. `.map` keeps
-      // order (no reorder) and `{ ...item, ...patch }` only overwrites the listed fields (no drop).
-      const inner: Scope = { ...scope, item: { var: '__it', fields: this.itemFields(st.target) } }; // `patch where … with …` — bare fields off __it
-      const pred = this.compileExpr(st.pred, inner);
-      const patch = this.compileExpr(st.patch, inner);
-      const mapped = (src: string): string => `${src}.map((__it) => (${pred}) ? { ...__it, ...${patch} } : __it)`;
-      out.push(ctx.queryStates.has(st.target)
-        ? `${st.target}.set({ ...${st.target}.get(), data: ${mapped(`${st.target}.get().data`)} });`
-        : `${st.target}.set(${mapped(`${st.target}.get()`)});`);
-    } else if (st.op === StOp.Create || st.op === StOp.Update || st.op === StOp.Delete) {
-      // server CRUD on a source-backed list: POST/PUT/DELETE the item, then reflect the change in the list.
-      const isQuery = ctx.queryStates.has(st.target);
-      const cur = isQuery ? `${st.target}.get().data` : `${st.target}.get()`;
-      const set = (data: string): string => isQuery ? `${st.target}.set({ ...${st.target}.get(), data: ${data} })` : `${st.target}.set(${data})`;
-      const err = isQuery ? `.catch((__e) => ${st.target}.set({ ...${st.target}.get(), error: String(__e) }))` : '';
-      const name = JSON.stringify(st.target);
-      const value = this.compileExpr(st.arg, scope);
-      if (isAsync) { // OPTIMISTIC: apply now (instant UI), reconcile with the server row on success, revert on failure.
-        if (st.op === StOp.Create) out.push(`{ const __i = { ...${value} }; if (__i.id == null) __i.id = __id(); const __prev = ${cur}; ${set(`[...__prev, __i]`)}; try { const __r = await __write(${name}, 'POST', null, __i); ${set(`${cur}.map((__x) => __x.id === __i.id ? __r : __x)`)}; } catch (__e) { ${set('__prev')}; throw __e; } }`);
-        else if (st.op === StOp.Update) out.push(`{ const __i = ${value}; const __prev = ${cur}; ${set(`__prev.map((__x) => __x.id === __i.id ? __i : __x)`)}; try { const __r = await __write(${name}, 'PUT', __i.id, __i); ${set(`${cur}.map((__x) => __x.id === __i.id ? __r : __x)`)}; } catch (__e) { ${set('__prev')}; throw __e; } }`);
-        else out.push(`{ const __i = ${value}; const __prev = ${cur}; ${set(`__prev.filter((__x) => __x.id !== __i.id)`)}; try { await __write(${name}, 'DELETE', __i.id, null); } catch (__e) { ${set('__prev')}; throw __e; } }`);
-      } else { // fire-and-forget (e.g. inside a .store effect): reflect on resolve, set the query error on failure
-        if (st.op === StOp.Create) out.push(`{ const __i = ${value}; __write(${name}, 'POST', null, __i).then((__r) => ${set(`[...${cur}, __r]`)})${err}; }`);
-        else if (st.op === StOp.Update) out.push(`{ const __i = ${value}; __write(${name}, 'PUT', __i.id, __i).then((__r) => ${set(`${cur}.map((__x) => __x.id === __i.id ? __r : __x)`)})${err}; }`);
-        else out.push(`{ const __i = ${value}; __write(${name}, 'DELETE', __i.id, null).then(() => ${set(`${cur}.filter((__x) => __x.id !== __i.id)`)})${err}; }`);
+      case StOp.Reset:
+        out.push(`${st.target}.set(${JSON.stringify(ctx.state[st.target].initial ?? null)});`);
+        break;
+      case StOp.Toggle:
+        out.push(`${st.target}.set(!${st.target}.get());`); // boolean flip
+        break;
+      case StOp.Set:
+        out.push(`${st.target}.set(${this.compileExpr(st.arg, scope)});`);
+        break;
+      case StOp.Push: {
+        const elem = (ctx.state[st.target].type.match(/^list<(.+)>$/) || [])[1];
+        const isEntity = elem && ctx.entities[elem]; // list<User> -> entity; list<uuid>/list -> scalar
+        // query-backed target carries { data, loading, error }, so splice into `.data`, not the signal.
+        const wrap = (value: string): string => ctx.queryStates.has(st.target)
+          ? `${st.target}.set({ ...${st.target}.get(), data: [...${st.target}.get().data, ${value}] });`
+          : `${st.target}.set([...${st.target}.get(), ${value}]);`;
+        if (isEntity) { // entity list: copy item + auto-fill uuid fields
+          out.push(`{ const __it = { ...${this.compileExpr(st.arg, scope)} };`);
+          for (const field of this.uuidFields(elem)) out.push(`  if (__it.${field} === null || __it.${field} === undefined) __it.${field} = __id(); // auto uuid`);
+          out.push(`  ${wrap('__it')} }`);
+        } else { // scalar list (ids, numbers): push value as-is
+          out.push(`${wrap(this.compileExpr(st.arg, scope))}`);
+        }
+        break;
       }
-    } else if (st.op === StOp.Refetch) {
-      // re-run a query with N query-string params (pagination / search / filters) → updates its signal.
-      const pairs = Object.entries(st.params).map(([k, e]) => `${JSON.stringify(k)}: ${this.compileExpr(e, scope)}`).join(', ');
-      out.push(`__refetch(${JSON.stringify(st.target)}, { ${pairs} }, ${st.target});`);
-    } else if (st.op === StOp.Request) {
-      // explicit non-REST request (escape hatch): build the url (with interpolation) + send the optional body.
-      const url = typeof st.url === 'string' ? JSON.stringify(st.url)
-        : st.url.parts.map((p) => typeof p === 'string' ? JSON.stringify(p) : `String(${this.compileExpr(p, scope)})`).join(' + ');
-      const body = st.body ? this.compileExpr(st.body, scope) : 'null';
-      out.push(isAsync ? `await __send(${url}, ${JSON.stringify(st.method)}, ${body});` : `__send(${url}, ${JSON.stringify(st.method)}, ${body}).catch(() => {});`);
-    } else if (st.op === StOp.Call) {
-      // a page action composing a STORE action: `shop.addProduct(draft)` → call the inlined/imported store fn.
-      this.ctx.usedStores.add(st.target);
-      out.push(`__store_${st.target}.${st.method}(${st.args.map((a) => this.compileExpr(a, scope)).join(', ')});`);
+      case StOp.Remove: {
+        const inner: Scope = { ...scope, item: { var: '__it', fields: this.itemFields(st.target) } }; // `remove where ...`: bare fields off __it
+        const pred = this.compileExpr(st.pred, inner);
+        out.push(ctx.queryStates.has(st.target)
+          ? `${st.target}.set({ ...${st.target}.get(), data: ${st.target}.get().data.filter((__it) => !(${pred})) });`
+          : `${st.target}.set(${st.target}.get().filter((__it) => !(${pred})));`);
+        break;
+      }
+      case StOp.Patch: {
+        // in-place edit: map the list, merging patch into matched items. `.map` keeps order
+        // and `{ ...item, ...patch }` overwrites only the listed fields (no drop).
+        const inner: Scope = { ...scope, item: { var: '__it', fields: this.itemFields(st.target) } }; // `patch where ... with ...`: bare fields off __it
+        const pred = this.compileExpr(st.pred, inner);
+        const patch = this.compileExpr(st.patch, inner);
+        const mapped = (src: string): string => `${src}.map((__it) => (${pred}) ? { ...__it, ...${patch} } : __it)`;
+        out.push(ctx.queryStates.has(st.target)
+          ? `${st.target}.set({ ...${st.target}.get(), data: ${mapped(`${st.target}.get().data`)} });`
+          : `${st.target}.set(${mapped(`${st.target}.get()`)});`);
+        break;
+      }
+      case StOp.Create:
+      case StOp.Update:
+      case StOp.Delete: {
+        // server CRUD on a source-backed list: POST/PUT/DELETE, then reflect the change locally.
+        const isQuery = ctx.queryStates.has(st.target);
+        const cur = isQuery ? `${st.target}.get().data` : `${st.target}.get()`;
+        const set = (data: string): string => isQuery ? `${st.target}.set({ ...${st.target}.get(), data: ${data} })` : `${st.target}.set(${data})`;
+        const err = isQuery ? `.catch((__e) => ${st.target}.set({ ...${st.target}.get(), error: String(__e) }))` : '';
+        const name = JSON.stringify(st.target);
+        const value = this.compileExpr(st.arg, scope);
+        if (isAsync) { // optimistic: apply now (instant UI), reconcile on success, revert on failure
+          if (st.op === StOp.Create) out.push(`{ const __i = { ...${value} }; if (__i.id == null) __i.id = __id(); const __prev = ${cur}; ${set(`[...__prev, __i]`)}; try { const __r = await __write(${name}, 'POST', null, __i); ${set(`${cur}.map((__x) => __x.id === __i.id ? __r : __x)`)}; } catch (__e) { ${set('__prev')}; throw __e; } }`);
+          else if (st.op === StOp.Update) out.push(`{ const __i = ${value}; const __prev = ${cur}; ${set(`__prev.map((__x) => __x.id === __i.id ? __i : __x)`)}; try { const __r = await __write(${name}, 'PUT', __i.id, __i); ${set(`${cur}.map((__x) => __x.id === __i.id ? __r : __x)`)}; } catch (__e) { ${set('__prev')}; throw __e; } }`);
+          else out.push(`{ const __i = ${value}; const __prev = ${cur}; ${set(`__prev.filter((__x) => __x.id !== __i.id)`)}; try { await __write(${name}, 'DELETE', __i.id, null); } catch (__e) { ${set('__prev')}; throw __e; } }`);
+        } else { // fire-and-forget (e.g. inside a .store effect): reflect on resolve, set error on failure
+          if (st.op === StOp.Create) out.push(`{ const __i = ${value}; __write(${name}, 'POST', null, __i).then((__r) => ${set(`[...${cur}, __r]`)})${err}; }`);
+          else if (st.op === StOp.Update) out.push(`{ const __i = ${value}; __write(${name}, 'PUT', __i.id, __i).then((__r) => ${set(`${cur}.map((__x) => __x.id === __i.id ? __r : __x)`)})${err}; }`);
+          else out.push(`{ const __i = ${value}; __write(${name}, 'DELETE', __i.id, null).then(() => ${set(`${cur}.filter((__x) => __x.id !== __i.id)`)})${err}; }`);
+        }
+        break;
+      }
+      case StOp.Refetch: {
+        // re-run a query with new query-string params (pagination/search/filters) and update its signal.
+        const pairs = Object.entries(st.params).map(([k, e]) => `${JSON.stringify(k)}: ${this.compileExpr(e, scope)}`).join(', ');
+        out.push(`__refetch(${JSON.stringify(st.target)}, { ${pairs} }, ${st.target});`);
+        break;
+      }
+      case StOp.Request: {
+        // non-REST request escape hatch: build the url (with interpolation) and send the optional body.
+        const url = typeof st.url === 'string' ? JSON.stringify(st.url)
+          : st.url.parts.map((p) => typeof p === 'string' ? JSON.stringify(p) : `String(${this.compileExpr(p, scope)})`).join(' + ');
+        const body = st.body ? this.compileExpr(st.body, scope) : 'null';
+        out.push(isAsync ? `await __send(${url}, ${JSON.stringify(st.method)}, ${body});` : `__send(${url}, ${JSON.stringify(st.method)}, ${body}).catch(() => {});`);
+        break;
+      }
+      case StOp.Call:
+        // page action calling a store action: `shop.addProduct(draft)` -> call the imported store fn.
+        this.ctx.usedStores.add(st.target);
+        out.push(`__store_${st.target}.${st.method}(${st.args.map((a) => this.compileExpr(a, scope)).join(', ')});`);
+        break;
     }
     return out;
   }
 
-  // ── declarations (state / action / effect) ───────────────────────────────────
+  // ── declarations (state / action / effect) ───────────────────────────────
 
-  // declared state → `signal(initial)` or `query(name)`. Exported when this is a .store slice.
+  // declared state -> `signal(initial)` or `query(name)`. Exported for a .store slice.
   genState(): string {
     const exp = this.ctx.format === Fmt.Store ? 'export ' : '';
     const out: string[] = [];
     for (const [name, def] of Object.entries(this.ctx.state)) {
       if (typeof def.source === 'string' && def.source.startsWith('query:')) {
-        out.push(`${exp}const ${name} = query(${JSON.stringify(def.source.slice('query:'.length))}${def.live ? ', true' : ''}); // async: ${name}.loading / .error / .data${def.live ? ' — live (websocket)' : ''}`);
+        out.push(`${exp}const ${name} = query(${JSON.stringify(def.source.slice('query:'.length))}${def.live ? ', true' : ''}); // async: ${name}.loading / .error / .data${def.live ? ' (websocket live)' : ''}`);
       } else {
         let initial: Value = def.initial ?? null;
         const elem = def.type.startsWith('list<') ? def.type.slice(5, -1) : '';
         const uuids = elem ? this.uuidFields(elem) : [];
         if (uuids.length && Array.isArray(initial)) {
-          // a literal seed needs a stable id too — `push` auto-mints one but seed rows didn't, so remove/update
-          // by id matched `undefined == undefined` (moving ONE item hit them ALL). Fill it deterministically
-          // (compile-time, so SSR and CSR agree — a runtime __id() would mismatch on hydration).
+          // seed rows need a stable id too: `push` auto-mints one but seeds didn't, so remove/update
+          // by id matched `undefined == undefined` (one move hit every row). Fill deterministically
+          // at compile-time so SSR and CSR agree (a runtime __id() would mismatch on hydration).
           initial = initial.map((row, i): Value => {
             if (typeof row !== 'object' || row === null || Array.isArray(row)) return row;
             const o: ValueObject = { ...row };
@@ -257,22 +271,22 @@ export class Logic {
     return out.join('\n  ');
   }
 
-  // declared actions → functions. An action whose input names a state takes no parameter (it reads
-  // that state directly). Exported for a .store slice so pages can import them.
+  // declared actions -> functions. An action whose input names a state reads it directly (no param).
+  // Exported for a .store slice so pages can import them.
   genActions(): string {
     const exp = this.ctx.format === Fmt.Store ? 'export ' : '';
-    const decls: string[] = []; // .pending/.error signals for write actions, hoisted above the functions
+    const decls: string[] = []; // .pending/.error signals for write actions, hoisted above the fns
     const out: string[] = [];
     for (const [name, action] of Object.entries(this.ctx.actions)) {
-      // multi-param form `action f(a: T, b: T)`: the params become the function signature AND scope locals,
-      // so refs resolve bare and shadow state. Else fall back to the legacy `<- input` path, unchanged.
+      // multi-param form `action f(a: T, b: T)`: params become the signature AND scope locals,
+      // so refs resolve bare and shadow state. Else fall back to the legacy `<- input` path.
       const hasParams = !!action.params?.length;
       const inputIsState = !hasParams && this.ctx.stateKeys.has(action.input);
       const scope: Scope = hasParams
         ? { locals: new Set(action.params!.map((p) => p.name)) }
         : { locals: new Set(), input: action.input, inputIsState };
       const param = hasParams ? action.params!.map((p) => p.name).join(', ') : inputIsState ? '' : action.input;
-      if (this.writeActions().has(name)) { // talks to the backend → async, with live .pending / .error
+      if (this.writeActions().has(name)) { // backend write -> async, with live .pending / .error
         decls.push(`${exp}const __pending_${name} = signal(false);`, `${exp}const __error_${name} = signal(null);`);
         out.push(`${exp}async function ${name}(${param}) {`);
         out.push(`  __pending_${name}.set(true); __error_${name}.set(null);`);
@@ -290,7 +304,7 @@ export class Logic {
     return [...decls, ...out].join('\n  ');
   }
 
-  // .store reactive side-effects → effect(() => { … }), re-running when the state they read changes.
+  // .store reactive side-effects -> effect(() => { ... }), re-running when the state they read changes.
   genEffects(): string {
     const scope: Scope = { locals: new Set() };
     return this.ctx.effects.map((body) =>

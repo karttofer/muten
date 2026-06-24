@@ -1,17 +1,16 @@
-// IR → .muten source — the inverse of parse. `print(ir)` round-trips: parse → print → parse yields
-// the same IR, so an AI can mutate the IR by node id (engine/ir/mutate.ts) and re-emit faithful source
-// instead of regenerating the whole file or text-patching it. Output is canonical, not byte-identical:
-// declaration order + spacing are normalized; the parsed result is what's guaranteed equal.
-import { Ek, BOp, UOp, StOp, Nt, Mod } from '#engine/shared/vocab.js';
+// print: IR -> .muten source, the inverse of parse. parse -> print -> parse yields the same IR,
+// so an AI can mutate the IR by node id (engine/ir/mutate.ts) and re-emit faithful source instead
+// of regenerating the file or text-patching it. Output is canonical (declaration order and spacing
+// are normalized); parsed equality is guaranteed, not byte identity.
+import { Ek, StOp, Nt, Mod } from '#engine/shared/vocab.js';
 import type {
-  IR, IRNode, NodeProps, Expr, Interp, ParamRef, Stmt, Value, Scalar, StateDef, ActionDef,
+  IR, IRNode, Expr, Interp, ParamRef, Stmt, Value, Scalar, StateDef, ActionDef,
   Route, Entity, EntityConstraints, PartDef, ArgMap, ArgValue, ClassCond, StringPropValue,
 } from '#engine/shared/types.js';
 
 const IND = '  ';
-const isInterp = (v: StringPropValue | undefined): v is Interp => !!v && typeof v === 'object' && 'kind' in v && v.kind === Ek.Interp;
 const isParam = (v: StringPropValue): v is ParamRef => typeof v === 'object' && '$param' in v;
-const isIdent = (s: string): boolean => /^[A-Za-z_][A-Za-z0-9_.]*$/.test(s); // a bare word (class name / ref) vs a quoted literal
+const isIdent = (s: string): boolean => /^[A-Za-z_][A-Za-z0-9_.]*$/.test(s); // bare word (class name / ref) vs a quoted literal
 
 // ── expressions ──────────────────────────────────────────────────────────────
 function printExpr(e: Expr): string {
@@ -23,11 +22,11 @@ function printExpr(e: Expr): string {
     case Ek.Tern: return `${wrap(e.cond)} ? ${wrap(e.then)} : ${wrap(e.else)}`;
     case Ek.Call: return `${e.fn}(${e.args.map(printExpr).join(', ')})`;
     case Ek.Obj: return `{ ${e.fields.map((f) => `${f.key}: ${printExpr(f.value)}`).join(', ')} }`;
-    case Ek.Agg: return `${e.list}.${e.op} ${e.op === 'count' ? 'where' : 'by'} ${printExpr(e.body)}`; // `lines.sum by price * qty` / `tasks.count where not done`
-    case Ek.Filter: return `${e.list} where ${printExpr(e.cond)}`; // derived list `tasks where status == "todo"`
+    case Ek.Agg: return `${e.list}.${e.op} ${e.op === 'count' ? 'where' : 'by'} ${printExpr(e.body)}`; // e.g. `lines.sum by price * qty` / `tasks.count where not done`
+    case Ek.Filter: return `${e.list} where ${printExpr(e.cond)}`; // derived list, e.g. `tasks where status == "todo"`
   }
 }
-// parenthesize nested binary/ternary so re-parse rebuilds the same tree (over-parenthesizes; structure wins)
+// parenthesize nested binary/ternary so re-parse rebuilds the same tree (over-parenthesizes to preserve structure)
 const wrap = (e: Expr): string => (e.kind === Ek.Bin || e.kind === Ek.Tern) ? `(${printExpr(e)})` : printExpr(e);
 
 const printScalar = (s: Scalar): string => typeof s === 'string' ? JSON.stringify(s) : String(s);
@@ -39,10 +38,10 @@ function printValue(v: Value): string {
   return printScalar(v);
 }
 
-// an interpolation rendered inside a quoted string: "Hi {user.name}"
+// interpolation inside a quoted string: "Hi {user.name}"
 const printInterp = (i: Interp): string => '"' + i.parts.map((p) => typeof p === 'string' ? p : `{${printExpr(p)}}`).join('') + '"';
-// the same parts as a bare path (no quotes): /product/{p.id}
-const printPath = (to: string | Interp): string => typeof to === 'string' ? to : to.parts.map((p) => typeof p === 'string' ? p : `{${printExpr(p)}}`).join('');
+// a path is a quoted string literal (interpolated): "/product/{p.id}"
+const printPath = (to: string | Interp): string => typeof to === 'string' ? JSON.stringify(to) : printInterp(to);
 
 function printStringProp(v: StringPropValue): string {
   if (typeof v === 'string') return JSON.stringify(v);
@@ -50,7 +49,7 @@ function printStringProp(v: StringPropValue): string {
   return printInterp(v);
 }
 
-const printArgValue = (v: ArgValue): string => typeof v === 'number' ? String(v) : typeof v === 'string' ? v : '$' + v.$param;
+const printArgValue = (v: ArgValue): string => typeof v === 'number' ? String(v) : typeof v === 'string' ? v : '$lit' in v ? JSON.stringify(v.$lit) : '$' + v.$param;
 const printArgMap = (m: ArgMap): string => Object.entries(m).map(([k, v]) => `${k}: ${printArgValue(v)}`).join(', ');
 const printClass = (c: string | ClassCond): string =>
   typeof c === 'string' ? (isIdent(c) ? c : JSON.stringify(c)) : `${isIdent(c.name) ? c.name : JSON.stringify(c.name)} when ${printExpr(c.cond)}`;
@@ -80,7 +79,7 @@ function printStmt(s: Stmt, ind: string): string {
 
 // ── the node tree ──────────────────────────────────────────────────────────────
 function printNode(n: IRNode, ind: string): string {
-  if (n.args) return `${ind}${n.type}(${printArgMap(n.args)})`;          // part instance: Name(arg: value)
+  if (n.args) return `${ind}${n.type}(${printArgMap(n.args)})`;          // part instance: Name(key: value)
   if (n.type === Nt.Slot) return `${ind}slot`;
   const p = n.props || {};
   let head: string;
@@ -125,12 +124,12 @@ const printState = (name: string, s: StateDef): string => {
 };
 const printAction = (name: string, a: ActionDef): string => {
   const sig = a.params?.length ? `(${a.params.map((p) => `${p.name}: ${p.type}`).join(', ')})` : '';
-  const tail = a.params?.length ? '' : (a.input ? ` <- ${a.input}` : ''); // multi-param and `<- input` never combine
+  const tail = a.params?.length ? '' : (a.input ? ` <- ${a.input}` : ''); // multi-param and `<- input` are mutually exclusive
   const head = `action ${name}${sig}${a.mutates.length ? ` mutates ${a.mutates.join(', ')}` : ''}${tail}`;
   return `${head} {\n${a.body.map((s) => IND + printStmt(s, IND)).join('\n')}\n}`;
 };
 const printRoute = (r: Route): string =>
-  `${r.url} -> ${r.page}${r.guard ? ` guard ${r.guardNeg ? 'not ' : ''}${r.guard}${r.redirect ? ` else ${r.redirect}` : ''}` : ''}`;
+  `${JSON.stringify(r.url)} -> ${r.page}${r.guard ? ` guard ${r.guardNeg ? 'not ' : ''}${r.guard}${r.redirect ? ` else ${JSON.stringify(r.redirect)}` : ''}` : ''}`;
 const printPart = (name: string, part: PartDef): string =>
   `part ${name}(${part.params.map((pp) => `${pp.name}: ${pp.type}`).join(', ')}) {\n${printNode(part.tree, IND)}\n}`;
 const block = (kw: string, body: string): string => `${kw} {\n${body}\n}`;

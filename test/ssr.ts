@@ -65,8 +65,8 @@ ok('og:* auto-derived from title/description', metaHtml.includes('property="og:t
 ok('reactive page exports meta (for the router)', compileModule(toDoc(parse('screen a\nmeta { title "T" }\nstate { n = 0 : number }\nPage { Title "{n}" }'))).includes('export const meta = {"title":"T"'));
 
 // real-path navigation: Links emit a real path (no #), so the history router / MPA navigation works
-ok('Link emits a real path (no #)', compile(toDoc(parse('screen a\nPage { Link "About" -> /about }'))).includes('href="/about"'));
-ok('reactive Link real path (no #)', compileModule(toDoc(parse('screen a\nstate { n = 0 : number }\nPage { Link "x" -> /about  Text "{n}" }'))).includes('.href = "/about"'));
+ok('Link emits a real path (no #)', compile(toDoc(parse('screen a\nPage { Link "About" -> "/about" }'))).includes('href="/about"'));
+ok('reactive Link real path (no #)', compileModule(toDoc(parse('screen a\nstate { n = 0 : number }\nPage { Link "x" -> "/about"  Text "{n}" }'))).includes('.href = "/about"'));
 
 // remote sources fetched at build (stubbed fetch): GET runs, non-GET is skipped (no side effects), offline → skip
 const realFetch = globalThis.fetch;

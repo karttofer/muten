@@ -1,9 +1,7 @@
-// Part composition: replaces each part instance with its tree, substituting $params
-// with the args. Parts DISAPPEAR at build-time → the IR stays flat, all primitives,
-// and the AI can still mutate it (spec §8: composition, not JS).
-//
-// Resolves nested parts (a part may instantiate another). Substitution is EXPLICIT per
-// value shape (prop / expression / interpolation / arg) — honestly typed, no generic any.
+// compose: replaces each part instance with its tree, substituting $params with the args.
+// Parts disappear at build-time so the IR stays flat and all-primitives, and the AI can
+// still mutate it by id. Resolves nested parts. Substitution is explicit per value shape
+// (prop / expression / interpolation / arg), honestly typed with no generic any.
 
 import { Ek } from '#engine/shared/vocab.js';
 import { toDoc } from '#engine/ir/flatten.js';
@@ -17,9 +15,9 @@ export function compose(tree: IRNode | null, parts: Parts): { tree: IRNode | nul
   return { tree: out, used: [...used] };
 }
 
-// THE single page-doc builder: inline parts, hoist the USED parts' entities/state, then flatten. Spreads
-// `ir` so EVERY field (imports/params/meta/…) survives — both the CLI loader and the editor analyzer go
-// through here, so a new IR field can never silently drop in just one path (the lint-drift that bit twice).
+// The single page-doc builder: inline parts, hoist the used parts' entities/state, then flatten.
+// Spreads `ir` so every field (imports/params/meta/...) survives. Both the CLI loader and the editor
+// analyzer go through here, so a new IR field can never silently drop in just one path.
 export function composeDoc(ir: IR, parts: Parts): { doc: Doc; used: string[] } {
   const { tree, used } = compose(ir.tree, parts);
   const entities = { ...ir.entities };
@@ -41,8 +39,8 @@ function composeNode(node: IRNode, parts: Parts, used: Set<string>): IRNode {
     return composeNode(inlined, parts, used);          // resolve nested parts
   }
   const out: IRNode = { type: node.type };
-  if (node.loc) out.loc = node.loc;   // the page's own nodes keep their position
-  if (node.args) out.args = node.args; // UNRESOLVED part instance (typo) → validate flags it unknown-part
+  if (node.loc) out.loc = node.loc;   // page's own nodes keep their source position
+  if (node.args) out.args = node.args; // unresolved part instance (typo): validate flags it unknown-part
   if (node.props) out.props = node.props;
   if (node.children) out.children = node.children.map((c) => composeNode(c, parts, used));
   return out;
@@ -57,7 +55,7 @@ function substitute(node: IRNode, args: ArgMap): IRNode {
   return out;
 }
 
-// node props: substitute only the ones that can carry a $param (text, expr, ref, args).
+// node props: substitute only props that can carry a $param (text, expr, ref, args).
 function subProps(props: NodeProps, args: ArgMap): NodeProps {
   const out: NodeProps = { ...props }; // passthrough for level/style/class/where/columns/component/data/as
   if (props.value !== undefined) out.value = subStringProp(props.value, args);
@@ -70,7 +68,7 @@ function subProps(props: NodeProps, args: ArgMap): NodeProps {
   if (props.list !== undefined) out.list = subExpr(props.list, args);
   if (props.arg !== undefined) out.arg = subExpr(props.arg, args);
   if (props.argRest !== undefined) out.argRest = props.argRest.map((a) => subExpr(a, args));
-  if (props.action !== undefined) out.action = refText(props.action, args); // action/submit names: $onSave
+  if (props.action !== undefined) out.action = refText(props.action, args); // action/submit names can be $params too
   if (props.submit !== undefined) out.submit = refText(props.submit, args);
   if (props.bind !== undefined) out.bind = refText(props.bind, args);
   if (props.to !== undefined) out.to = typeof props.to === 'string' ? props.to : subInterp(props.to, args);
@@ -79,16 +77,23 @@ function subProps(props: NodeProps, args: ArgMap): NodeProps {
   return out;
 }
 
-// a positional string prop: plain text passes through; { $param } → the arg; interpolation recurses.
+// a positional string prop: plain text passes through, { $param } resolves to the arg, interpolation recurses.
 function subStringProp(v: StringPropValue, args: ArgMap): StringPropValue {
   if (typeof v === 'string') return v;
-  if ('$param' in v) { const a = args[v.$param]; return typeof a === 'number' ? String(a) : a; } // {$param} → arg
+  if ('$param' in v) { const a = args[v.$param]; return typeof a === 'number' ? String(a) : (typeof a === 'object' && '$lit' in a) ? a.$lit : a; } // {$param} -> arg
   return subInterp(v, args);                                                                      // interpolation
 }
 
 // expression: substitute $param refs inside; structure (kind) is preserved.
 function subExpr(e: Expr, args: ArgMap): Expr {
-  if (e.kind === Ek.Ref) return { kind: Ek.Ref, name: refText(e.name, args) }; // $char.image → c.image
+  if (e.kind === Ek.Ref) {
+    if (e.name.startsWith('$')) {                                       // a part param in an expr position
+      const a = args[e.name.slice(1).split('.')[0]];
+      if (a !== undefined && typeof a === 'object' && '$lit' in a) return { kind: Ek.Lit, value: a.$lit }; // literal stays a literal, not a ref
+      if (typeof a === 'number') return { kind: Ek.Lit, value: a };
+    }
+    return { kind: Ek.Ref, name: refText(e.name, args) };              // $char.image -> c.image
+  }
   if (e.kind === Ek.Bin) return { ...e, left: subExpr(e.left, args), right: subExpr(e.right, args) };
   if (e.kind === Ek.Un) return { ...e, operand: subExpr(e.operand, args) };
   if (e.kind === Ek.Tern) return { ...e, cond: subExpr(e.cond, args), then: subExpr(e.then, args), else: subExpr(e.else, args) };
@@ -114,7 +119,8 @@ function subArgs(m: ArgMap, args: ArgMap): ArgMap {
 function subArgValue(v: ArgValue, args: ArgMap): ArgValue {
   if (typeof v === 'string') return v.startsWith('$') ? refText(v, args) : v;
   if (typeof v === 'number') return v;
-  return args[v.$param]; // nested $param → the arg
+  if ('$lit' in v) return v;        // quoted literal: nothing to substitute
+  return args[v.$param];            // nested $param -> the arg
 }
 
 // "$char.image" + {char:"c"} -> "c.image";  "$onSave" -> "addFav".  Non-$ strings pass through.
@@ -123,5 +129,6 @@ function refText(name: string, args: ArgMap): string {
   const head = name.slice(1).split('.')[0];
   const rest = name.slice(1 + head.length);
   const a = args[head];
-  return (typeof a === 'string' ? a : head) + rest;
+  const av = (a !== undefined && typeof a === 'object' && '$lit' in a) ? a.$lit : (typeof a === 'string' ? a : head);
+  return av + rest;
 }

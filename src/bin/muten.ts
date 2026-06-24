@@ -1,9 +1,7 @@
 #!/usr/bin/env node
-// CLI:  muten <build|check|map|lint> [dir] [--json]   (default dir: the current directory)
-//   build   compile → dist/<route>/index.html (+ app.map.json)
-//   check   parse + validate every page, no compile (the deterministic oracle); --json → machine diagnostics
-//   map     emit app.map.json COLD (no build) → the app graph an AI reads first; --json → stdout
-//   lint    alias of check
+// CLI entry point for the `muten` command.
+// Commands: build, check (lint), map. Delegates to build.ts, lint.ts, and map.js.
+// Consumed by package.json "bin" -> users run `muten build|check|map|lint [dir] [--json]`.
 import { resolve, join } from 'node:path';
 import { writeFileSync } from 'node:fs';
 import { buildApp } from '../build.js';

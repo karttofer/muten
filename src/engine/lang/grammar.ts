@@ -1,23 +1,16 @@
-// ============================================================================
-// Grammar — the reading foundation the screen parser stands on
-// ============================================================================
-// Three things every layer of the parser shares live here, so nothing is duplicated:
-//   1. the CURSOR over the token stream — peek/at/next/eat + source-position lookup;
-//   2. the EXPRESSION grammar (conditions, arithmetic, ternaries, { } interpolation);
-//   3. the LITERAL-VALUE reader (the JSON-ish data in state initials, mock, sources).
-//
-// The high-level Parser (parse.ts) `extends Grammar`, so a declaration, a node and a
-// `when` condition all walk ONE cursor and reuse the SAME expression grammar — which is
-// why `x > 0` parses identically in a condition and inside a "total: {x * 2}". Every
-// token it matches comes from vocab (Tk/Pn/Kw/BOp/UOp/Ek): there are no magic strings.
+// grammar: shared foundation for the screen parser.
+// Provides: the token cursor (peek/at/next/eat + position lookup), the expression
+// grammar (conditions, arithmetic, ternaries, interpolation), and the literal-value
+// reader (JSON-ish data for state initials, mock, sources). Parser (parse.ts) extends
+// this, so all layers share one cursor and one expression grammar. No magic strings.
 
 import { ParseError } from '#engine/shared/diagnostics.js';
 import { tokenize } from '#engine/lang/lexer.js';
 import { Tk, Pn, Kw, BOp, UOp, Ek, AGG_OPS, SORT_OPS } from '#engine/shared/vocab.js';
 import type { Token, Loc, Expr, Interp, Scalar, Value } from '#engine/shared/types.js';
 
-// Comparison operators expressed as data: [token kind, optional token value] → the binary op
-// it yields. A table (not an if-chain) means adding an operator is a single new row.
+// Comparison operators as a table: [token kind, optional value] -> binary op.
+// Adding an operator is a single new row.
 const COMPARISONS: Array<[Tk, string | undefined, BOp]> = [
   [Tk.Eq, undefined, BOp.Eq],
   [Tk.Neq, undefined, BOp.Neq],
@@ -28,15 +21,15 @@ const COMPARISONS: Array<[Tk, string | undefined, BOp]> = [
   [Tk.Ident, Kw.Contains, BOp.Contains],
 ];
 
-// The three keyword literals, mapped to their runtime values. Shared by `primary` (inside an
-// expression) and `parseScalar` (a bare value), so `true`/`false`/`null` mean the same everywhere.
+// Keyword literals mapped to runtime values, shared by `primary` and `parseScalar`
+// so `true`/`false`/`null` mean the same thing in expressions and bare values.
 const LITERALS = new Map<string, Scalar>([
   [Kw.True, true], [Kw.False, false], [Kw.Null, null],
 ]);
 
 export class Grammar {
-  // The cursor: the full token stream and where we are in it. `lineStarts` records the offset of
-  // every line so any token's index resolves to a 1-based line/col in O(log n) for diagnostics.
+  // Full token stream + current position. `lineStarts` maps every line's offset
+  // so any token resolves to a 1-based line/col in O(log n) for diagnostics.
   protected readonly toks: Token[];
   protected pos = 0;
   private readonly lineStarts: number[] = [0];
@@ -74,10 +67,10 @@ export class Grammar {
   }
 
   // ── expressions ──────────────────────────────────────────────────────────
-  // A precedence ladder, lowest-binding first:
+  // Precedence ladder, lowest-binding first:
   //   ternary < or < and < comparison < add < mul < unary < primary
-  // Each level parses the level above it, then folds left while its own operator keeps appearing,
-  // so `a or b and c` groups as `a or (b and c)` and `a + b * c` as `a + (b * c)`.
+  // Each level folds left while its operator keeps appearing, so `a or b and c`
+  // groups as `a or (b and c)` and `a + b * c` as `a + (b * c)`.
   parseExpr(): Expr { return this.ternary(); }
 
   private ternary(): Expr {
@@ -101,7 +94,7 @@ export class Grammar {
     return left;
   }
 
-  // the current token as a comparison op, or null if it isn't one (table-driven lookup).
+  // Returns the current token as a comparison op, or null (table-driven lookup).
   private comparison(): BOp | null {
     for (const [kind, value, op] of COMPARISONS) if (this.at(kind, value)) return op;
     return null;
@@ -139,10 +132,10 @@ export class Grammar {
     return { kind: Ek.Un, op: UOp.Not, operand: this.unary() };
   }
 
-  // the atoms: a parenthesised expression, an object literal, a literal, or a (possibly dotted) reference.
+  // Atoms: parenthesised expr, object literal, literal value, or a (possibly dotted) reference.
   private primary(): Expr {
     if (this.at(Tk.Punct, Pn.ParenL)) { this.next(); const inner = this.ternary(); this.eat(Tk.Punct, Pn.ParenR); return inner; }
-    if (this.at(Tk.Punct, Pn.BraceL)) { // inline object literal: `{ title: @t, qty: 1 }` — the one missing value form
+    if (this.at(Tk.Punct, Pn.BraceL)) { // inline object literal: `{ title: @t, qty: 1 }` (the one missing value form)
       this.next();
       const fields: Array<{ key: string; value: Expr }> = [];
       while (!this.at(Tk.Punct, Pn.BraceR)) {
@@ -158,24 +151,24 @@ export class Grammar {
     if (this.at(Tk.Number)) return { kind: Ek.Lit, value: Number(this.next().v) };
     let name = this.at(Tk.Param) ? '$' + this.next().v : this.eat(Tk.Ident).v; // $param resolves at compose time
     const literal = LITERALS.get(name);
-    if (literal !== undefined) return { kind: Ek.Lit, value: literal }; // true | false | null
+    if (literal !== undefined) return { kind: Ek.Lit, value: literal }; // true, false, or null
     while (this.at(Tk.Punct, Pn.Dot)) { this.next(); name += '.' + this.eat(Tk.Ident).v; } // user.name, cart.total
     const dot = name.lastIndexOf('.');
     const op = dot === -1 ? '' : name.slice(dot + 1);
     const isAgg = AGG_OPS.has(op) || SORT_OPS.has(op);
-    // canonical lambda-free aggregate: `lines.sum by price * qty` (projection) / `tasks.count where not done` (predicate);
-    // item fields are read BARE (item-implicit), exactly like the `where`-filter and `each`.
+    // Lambda-free aggregate: `lines.sum by price * qty` (projection) or
+    // `tasks.count where not done` (predicate). Item fields are read bare (item-implicit).
     if (isAgg && (this.at(Tk.Ident, Kw.By) || this.at(Tk.Ident, Kw.Where))) {
       this.next();
       return { kind: Ek.Agg, op, list: name.slice(0, dot), body: this.parseExpr() };
     }
-    if (!isAgg && this.at(Tk.Ident, Kw.Where)) {             // derived list: `tasks where status == "todo"` — item fields read bare
+    if (!isAgg && this.at(Tk.Ident, Kw.Where)) {             // derived list: `tasks where status == "todo"`, item fields read bare
       this.next();
       return { kind: Ek.Filter, list: name, cond: this.parseExpr() };
     }
     if (this.at(Tk.Punct, Pn.ParenL)) {
       if (isAgg) throw new ParseError(`\`${op}\` takes ${op === 'count' ? '`where <cond>`' : '`by <expr>`'} now, not a \`(x => …)\` lambda — write \`${name.slice(0, dot)}.${op} ${op === 'count' ? 'where <cond>' : 'by <expr>'}\` (item fields read bare)`, this.locOf(this.peek().pos));
-      this.next();                                            // a call: fmt(a, b) → a use'd function
+      this.next();                                            // a call: fmt(a, b) -> a use'd function
       const args: Expr[] = [];
       while (!this.at(Tk.Punct, Pn.ParenR)) { args.push(this.ternary()); if (this.at(Tk.Punct, Pn.Comma)) this.next(); }
       this.eat(Tk.Punct, Pn.ParenR);
@@ -184,8 +177,8 @@ export class Grammar {
     return { kind: Ek.Ref, name };
   }
 
-  // "Hi, {user.name}!" → an interpolation: literal text chunks interleaved with embedded
-  // expressions. Plain text with no `{ }` stays a plain string (the caller treats it as constant).
+  // "Hi, {user.name}!" -> interpolation: literal text chunks interleaved with expressions.
+  // Plain text with no `{ }` stays a plain string (the caller treats it as constant).
   protected parseInterpolation(raw: string): string | Interp {
     if (!raw.includes('{')) return raw;
     const parts: Array<string | Expr> = [];
@@ -195,21 +188,21 @@ export class Grammar {
       if (open < 0) { parts.push(raw.slice(cursor)); break; }
       if (open > cursor) parts.push(raw.slice(cursor, open));
       const close = raw.indexOf('}', open);
-      if (close < 0) { parts.push(raw.slice(open)); break; } // unbalanced — keep the rest verbatim
-      parts.push(new Grammar(raw.slice(open + 1, close)).parseExpr()); // {expr} → a full expression AST
+      if (close < 0) { parts.push(raw.slice(open)); break; } // unbalanced: keep the rest verbatim
+      parts.push(new Grammar(raw.slice(open + 1, close)).parseExpr()); // {expr} -> full expression AST
       cursor = close + 1;
     }
     return { kind: Ek.Interp, parts };
   }
 
-  // ── literal values (JSON-ish: state initials, mock data, source descriptors) ──────────
+  // ── literal values: state initials, mock data, source descriptors (JSON-ish) ──────────
   /** A single scalar: string | number | true | false | null | a bare ident (an enum value). */
   protected parseScalar(): Scalar {
     if (this.at(Tk.String)) return this.next().v;
     if (this.at(Tk.Number)) return Number(this.next().v);
     const word = this.eat(Tk.Ident).v;
     const literal = LITERALS.get(word);
-    return literal !== undefined ? literal : word; // keyword literal, else an enum value (e.g. admin)
+    return literal !== undefined ? literal : word; // keyword literal, or a bare enum value (e.g. admin)
   }
 
   /** A value: a scalar, an array, or an object. */

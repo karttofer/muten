@@ -115,7 +115,7 @@ muten is **Solid's fine-grained signals + Svelte's compile-to-direct-DOM**, with
 
 No diffing, no virtual-DOM memory, no framework interpreter to ship. That is what keeps muten fast as apps grow; for *huge* lists you still virtualize (render only the visible rows) and send server-side deltas, exactly as you would in any framework.
 
-## How muten couples with the rest of the web - three tiers
+## How muten couples with the rest of the web - two tiers
 
 muten the *language* stays tiny on purpose; a muten *app* reaches the whole web platform through **bounded,
 analyzable escapes**. The point: you never *fight* the language to do something it doesn't have, you drop to the
@@ -160,7 +160,7 @@ my-app/
 
 ```
 routes {
-  / -> home
+  "/" -> home
 }
 ```
 
@@ -245,10 +245,12 @@ server + HMR, the VS Code extension (live-lint + autocomplete).
 The bounded list toolkit - inline objects, `patch`, `each…where`, aggregates (`sum`/`count`/`avg`/`min`/`max`),
 `sort`/`sortDesc`, and page→store action composition, so a real CRUD/dashboard app is pure muten, no JS escape.
 `Form` fields cover `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select), with validation.
+Reactivity is keyed and batched: `each`/`DataTable` reconcile rows by `id` with minimal DOM moves, and `query x live`
+streams real-time updates over a WebSocket (only changed rows re-render).
 
 **Next, toward 1.0:**
 - a `date`/`textarea` `Form` field type; number formatting (`round` / currency) in expressions.
-- keyed `each` (large-list perf); a live `source` (SSE / websocket) for real-time.
+- built-in virtualization for huge lists (today you render only visible rows yourself).
 - richer SSG for stateful multi-page apps (today a shared `.store` across pages deploys via `vite build`, not the
   static `muten build`).
 

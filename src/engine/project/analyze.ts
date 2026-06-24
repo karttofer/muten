@@ -1,12 +1,7 @@
-// PROJECT-AWARE analysis — the engine behind the "smart" linter/autocomplete.
-//
-// Unlike a single-file linter, this knows the WHOLE app:
-//  - loads all parts (shared `src/parts/` + local `pages/<route>/parts/`), so it resolves
-//    instances (`Changelog()`) and catches typos in part names;
-//  - hoists the state of used parts, so `@refs` are validated for real;
-//  - knows which parts and which `@state` to offer in autocomplete.
-//
-// Uses node:fs (runs in the extension host and in Node). Consumed by extension.js and the CLI.
+// analyze: project-aware linter and autocomplete engine.
+// Knows the whole app (all parts, all stores, theme) so part-name typos, @ref mismatches,
+// and bad store refs are caught in context. Runs in both the extension host and Node (uses node:fs).
+// Consumed by extension.js and the CLI `muten lint` command.
 
 import fs from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -20,7 +15,7 @@ import type { Theme, PartDef, Route, Diagnostic, ValidateResult, StateDef, Compl
 
 type Parts = { [name: string]: PartDef };
 
-// the project's theme.muten (scale) → so the editor validates token VALUES, not just shape
+// Load theme.muten so the editor validates token VALUES against the actual scale, not just shape.
 export function projectTheme(filePath: string): Theme {
   const appRoot = findAppRoot(filePath);
   if (!appRoot) return mergeTheme({});
@@ -28,7 +23,7 @@ export function projectTheme(filePath: string): Theme {
   catch { return mergeTheme({}); }
 }
 
-// loads parts from a folder (without styles: the lint doesn't need them)
+// Loads parts from a folder without resolving styles (the linter doesn't need them).
 function loadPartsLite(dir: string): Parts {
   const parts: Parts = {};
   let files: string[];
@@ -44,7 +39,7 @@ function loadPartsLite(dir: string): Parts {
   return parts;
 }
 
-// walks up until it finds the app root (the one with src/pages)
+// Walks up the directory tree to find the app root (identified by src/pages).
 function findAppRoot(filePath: string): string | null {
   let dir = dirname(filePath);
   for (let i = 0; i < 30; i++) {
@@ -56,7 +51,7 @@ function findAppRoot(filePath: string): string | null {
   return null;
 }
 
-// every `parts/` folder under the app's src/ (parts are app-global)
+// Returns every `parts/` folder under src/ (parts are app-global, so all must be scanned).
 function allPartsDirs(root: string): string[] {
   const dirs: string[] = [];
   const walk = (d: string): void => {
@@ -73,7 +68,7 @@ function allPartsDirs(root: string): string[] {
   return dirs;
 }
 
-// app-global store domains (every *.store under src/) — so .muten store refs (cart.total) validate
+// App-global store domains (every *.store under src/) so .muten store refs like cart.total validate.
 export function projectStores(filePath: string): string[] {
   const appRoot = findAppRoot(filePath);
   if (!appRoot) return [];
@@ -91,8 +86,8 @@ export function projectStores(filePath: string): string[] {
   return out;
 }
 
-// domain → its member names (state + gets + actions), so validate can allow `cart.count` refs
-// and page→store action composition (`cart.add(d)`). Mirrors projectStores' walk, but parses each store.
+// domain -> member names (state + gets + actions) so validate can allow `cart.count` refs
+// and page-to-store action calls like `cart.add(d)`. Same walk as projectStores but parses each file.
 export function projectStoreMembers(filePath: string): { [domain: string]: string[] } {
   const appRoot = findAppRoot(filePath);
   if (!appRoot) return {};
@@ -124,7 +119,7 @@ export function projectParts(filePath: string): Parts {
   return parts;
 }
 
-// lint the ROOT file (app.muten): every route must point to an existing page; no dup urls.
+// Lint the root file (app.muten): every route must point to an existing page, no duplicate URLs.
 function analyzeRoutes(filePath: string, routes: Route[]): ValidateResult {
   const appRoot = findAppRoot(filePath);
   const pagesDir = appRoot ? join(appRoot, 'src', 'pages') : null;
@@ -142,7 +137,7 @@ function analyzeRoutes(filePath: string, routes: Route[]): ValidateResult {
   return { ok: D.length === 0, diagnostics: D };
 }
 
-// diagnostics for a file, aware of the whole app
+// Diagnostics for a file, dispatched by file type (app.muten, theme.muten, .store, or page).
 export function analyze(filePath: string, text: string): ValidateResult {
   let ir;
   try { ir = parse(text); }
@@ -150,17 +145,17 @@ export function analyze(filePath: string, text: string): ValidateResult {
     if (e instanceof ParseError && e.loc) return { ok: false, diagnostics: [diag('syntax', e.message, { loc: e.loc })] };
     return { ok: true, diagnostics: [] };
   }
-  if (ir.routes) return analyzeRoutes(filePath, ir.routes); // app.muten = ROOT file, not a page
-  if (ir.theme) return { ok: true, diagnostics: [] };       // theme.muten = a config block, not a page
-  if (filePath.endsWith('.store')) { // a .store DOMAIN slice (state + get + action + effect), not a page
+  if (ir.routes) return analyzeRoutes(filePath, ir.routes); // app.muten: route-level checks only
+  if (ir.theme) return { ok: true, diagnostics: [] };       // theme.muten: config only, nothing to validate
+  if (filePath.endsWith('.store')) { // .store domain slice (state + get + action + effect)
     return validate({ screen: 'store', state: ir.state || {}, actions: ir.actions || {}, entities: ir.entities || {}, gets: ir.gets || {}, effects: ir.effects || [], consts: {}, constraints: {}, rootId: undefined, nodes: {} }, { kind: 'store' });
   }
   const parts = projectParts(filePath);
-  const { doc } = composeDoc(ir, parts); // resolve parts (typos survive → flagged) + hoist state → THE one doc builder
+  const { doc } = composeDoc(ir, parts); // resolve parts (typos flagged) + hoist state -> flat doc
   return validate(doc, { parts: Object.keys(parts), stores: projectStores(filePath), storeMembers: projectStoreMembers(filePath), theme: projectTheme(filePath) });
 }
 
-// autocomplete context: the parts, state and actions this file knows within the WHOLE app
+// Autocomplete context: parts, state, and actions visible to this file across the whole app.
 export function completion(filePath: string, text: string): CompletionResult {
   let ir = null;
   try { ir = parse(text); } catch { /* whatever could be parsed */ }
@@ -173,7 +168,7 @@ export function completion(filePath: string, text: string): CompletionResult {
     stateList.push({ name, type: d.type || '', query: typeof d.source === 'string' && d.source.startsWith('query:') });
   };
   for (const [n, d] of Object.entries(ir?.state || {})) addState(n, d);
-  for (const def of Object.values(parts)) for (const [n, d] of Object.entries(def.state || {})) addState(n, d); // hoisted
+  for (const def of Object.values(parts)) for (const [n, d] of Object.entries(def.state || {})) addState(n, d); // from used parts
 
   return { parts: partList, state: stateList, actions: Object.keys(ir?.actions || {}), primitives: PRIMITIVE_NAMES, theme: projectTheme(filePath) };
 }

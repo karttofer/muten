@@ -84,7 +84,7 @@ const TH = mergeTheme({ space: { sm: '8px', md: '16px', lg: '24px' }, font: { lg
 }
 // static page (no reactivity) → zero-runtime module (no signals, just innerHTML)
 {
-  const ir = parse('screen about\nPage style(gap.md, md:cols.2) { Title "Hi" h1  Text "Plain." Link "Home" -> / }');
+  const ir = parse('screen about\nPage style(gap.md, md:cols.2) { Title "Hi" h1  Text "Plain." Link "Home" -> "/" }');
   const code = compile(toDoc(ir), {}, '', {}, {}, { format: 'module', theme: TH });
   ok('static: NO runtime import', !code.includes("from 'virtual:muten/runtime'"), '');
   ok('static: uses innerHTML', code.includes('innerHTML'));

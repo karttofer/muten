@@ -34,7 +34,7 @@ Page style(padding.lg, gap.md) {
   when products.loading { Text "Loading" class("opacity-60") }
   each products as p {
     Stack style(gap.sm) class("p-4 rounded-lg shadow") {
-      Link "{p.title}" -> /product/{p.id} class("font-semibold")
+      Link "{p.title}" -> "/product/{p.id}" class("font-semibold")
       Button "Add" -> cart.add(p.id) class("px-3 py-1")
     }
   }
@@ -47,7 +47,7 @@ action add mutates items <- id { items.push(id) }`);
 roundtrips('part: ProductCard', `entity Product { id text  title text }
 part ProductCard(product: Product, onAdd: action) {
   Stack class("card") {
-    Link "{$product.title}" -> /product/{$product.id}
+    Link "{$product.title}" -> "/product/{$product.id}"
     Button "Add" -> $onAdd($product.id)
   }
 }`);
@@ -57,14 +57,14 @@ roundtrips('app: shell+routes', `api {
 }
 shell {
   Header style(row, between) {
-    Link "Shop" -> /
+    Link "Shop" -> "/"
     Span "Cart {cart.count}"
   }
   slot
 }
 routes {
-  / -> products
-  /product/:id -> product
+  "/" -> products
+  "/product/:id" -> product
 }`);
 
 roundtrips('exprs+control', `screen s

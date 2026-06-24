@@ -10,7 +10,7 @@ let f = 0;
 const ok = (l, c, e = '') => { console.log((c ? '✓' : '✗') + ' ' + l + (c ? '' : '   ← ' + e)); if (!c) f++; };
 
 // 1. route paths keep their :param segments (and static segments around them)
-const app = parse('routes {\n  / -> home\n  /shop/:cat/item/:id -> item\n}');
+const app = parse('routes {\n  "/" -> home\n  "/shop/:cat/item/:id" -> item\n}');
 ok('route :param segments parsed', app.routes[1].url === '/shop/:cat/item/:id', app.routes[1].url);
 ok('static root route intact', app.routes[0].url === '/', app.routes[0].url);
 

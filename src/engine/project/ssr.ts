@@ -1,11 +1,10 @@
-import type { Value } from '#engine/shared/types.js';
+﻿import type { Value } from '#engine/shared/types.js';
 import { sourceRequest, sourceRows } from '#engine/shared/source.js';
 
-// Build-time DOM — the minimal subset of the DOM that compile.ts's output touches, so a page can be
-// pre-rendered (SSR) by EXECUTING the real compiled module against it and serializing the result. The
-// win over a parallel static renderer: there's nothing to keep in sync — the same code that runs in the
-// browser produces the build-time HTML. ponytail: it implements exactly the ops genNode emits; any op it
-// lacks throws, and the build catches that and falls back to the CSR shell for that page.
+// ssr: minimal fake DOM for build-time pre-rendering (SSR/SSG).
+// Executes the real compiled module against it and serializes the result, so there is nothing
+// to keep in sync with the browser path. Implements exactly the ops genNode emits: any op it
+// lacks throws, and the build falls back to the CSR shell for that page. Consumed by build.ts.
 
 const VOID = new Set(['img', 'input', 'br', 'hr', 'meta', 'link', 'source']);
 
@@ -24,7 +23,7 @@ class SNode {
 }
 
 class SText extends SNode { constructor(public text: string) { super(); } }
-class SComment extends SNode { constructor(public text: string) { super(); } } // when/each anchors — irrelevant to output
+class SComment extends SNode { constructor(public text: string) { super(); } } // when/each anchors, stripped from output
 
 class SElement extends SNode {
   children: SNode[] = [];
@@ -94,7 +93,7 @@ function serialize(node: SNode): string {
 
 // Execute a Fmt.Ssr factory (self-contained: inlined runtime + synchronous mock data) against the fake
 // DOM and return the rendered inner HTML of #app. Throws if the page touches something the fake DOM or
-// Node lacks (stores, exotic Custom JS) — the caller falls back to the CSR shell.
+// Node lacks (stores, exotic custom JS): the caller falls back to the CSR shell.
 export function renderSsrBody(factoryCode: string): string {
   const document = new SDocument();
   const app = new SElement('div');
@@ -104,9 +103,9 @@ export function renderSsrBody(factoryCode: string): string {
   return app.children.map(serialize).join('');
 }
 
-// Fetch a page's remote `sources` at build so source-backed lists pre-render (SSG) — mirroring the browser
-// data layer (a bare URL → the JSON array; `{ url, at }` → `json[at]`). A failed/offline fetch leaves that
-// list empty so the client fetches it at runtime; the build never breaks on a flaky source.
+// Fetch a page's remote `sources` at build so source-backed lists pre-render (SSG).
+// Mirrors the browser data layer (bare URL -> JSON array; { url, at } -> json[at]).
+// A failed/offline fetch leaves the list empty so the client fetches at runtime.
 export async function fetchSources(sources: { [name: string]: Value }, api: Value = {}): Promise<{ [name: string]: Value }> {
   const out: { [name: string]: Value } = {};
   for (const [name, src] of Object.entries(sources)) {

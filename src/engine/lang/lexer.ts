@@ -1,34 +1,33 @@
-// Lexer: .muten source text → a flat token stream (each token carries its start index).
-// Kept separate from the parser so each file stays focused (and under the size limit).
-// All matched characters/operators come from vocab (Tk/Pn): no magic strings.
+// lexer: .muten source text -> flat token stream (each token carries its start index).
+// Separate from the parser to keep each file focused. All matched characters and
+// operators come from vocab (Tk/Pn): no magic strings. Consumed by grammar.ts.
 
 import { Tk, Pn } from '#engine/shared/vocab.js';
 import { ParseError } from '#engine/shared/diagnostics.js';
 import type { Token, Loc } from '#engine/shared/types.js';
 
-const PUNCT_CHARS = Object.values(Pn).join(''); // the single-char punctuation set
+const PUNCT_CHARS = Object.values(Pn).join(''); // single-char punctuation set
 
-// two-character operators, matched (as a table) before single-char punctuation.
+// two-char operators matched as a table, before single-char punctuation.
 const OPERATORS: Array<[string, Tk]> = [
   ['->', Tk.Arrow], ['<-', Tk.LArrow], ['==', Tk.Eq], ['=>', Tk.FatArrow],
   ['!=', Tk.Neq], ['<=', Tk.Lte], ['>=', Tk.Gte],
 ];
 
-// character classes (named, so the scanners read like prose).
+// named so the scanners read like prose.
 const isSpace = (char: string): boolean => char === ' ' || char === '\t' || char === '\r' || char === '\n';
 const isDigit = (char: string): boolean => char >= '0' && char <= '9';
 const isWordStart = (char: string): boolean => (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || char === '_';
 const isWord = (char: string): boolean => isWordStart(char) || isDigit(char);
 
-// 1-based line/col for a source index (used when the lexer hits a bad character).
+// 1-based line/col for a source index, used when the lexer hits a bad character.
 function locFromIndex(source: string, index: number): Loc {
   let line = 1, col = 1;
   for (let scan = 0; scan < index && scan < source.length; scan++) { if (source[scan] === '\n') { line++; col = 1; } else col++; }
   return { line, col };
 }
 
-// The Lexer holds the cursor (source + index + tokens) and one scan method per token shape,
-// so the main loop is a flat dispatch instead of a growing chain of inline scanners.
+// One scan method per token shape; the main loop is a flat dispatch, not an inline chain.
 class Lexer {
   private index = 0;
   private readonly tokens: Token[] = [];
@@ -42,7 +41,7 @@ class Lexer {
       if (isSpace(char)) { this.index++; continue; }
       if (char === '#') { this.skipComment(); continue; }
       if (char === '"') { this.scanString(start); continue; }
-      if (char === '@') { this.scanSigil(start, Tk.Ref, '@'); continue; }   // @state
+      if (char === '@') { this.scanSigil(start, Tk.Ref, '@'); continue; }   // @state ref
       if (char === '$') { this.scanSigil(start, Tk.Param, ''); continue; }  // $partParam
       if (this.scanOperator(start)) continue;                              // ->, <-, ==, =>, !=, <=, >=
       if (isDigit(char) || (char === Pn.Dash && isDigit(source[this.index + 1]))) { this.scanNumber(start); continue; }
@@ -58,8 +57,8 @@ class Lexer {
 
   private skipComment(): void { while (this.index < this.source.length && this.source[this.index] !== '\n') this.index++; }
 
-  // "...": read until the closing quote — but a `"` INSIDE a `{…}` interpolation is a nested string literal,
-  // not the end (so `"Total ({items.count(i => i.status == "paid")})"` lexes as one string with an interp).
+  // Read until the closing quote, but a `"` inside `{...}` is a nested string literal,
+  // not the end: `"Total ({items.count(i => i.status == "paid")})"` is one string token.
   private scanString(start: number): void {
     const { source } = this; let end = this.index + 1; let value = ''; let depth = 0;
     while (end < source.length && (source[end] !== '"' || depth > 0)) {
@@ -70,14 +69,14 @@ class Lexer {
     this.push(Tk.String, value, start); this.index = end + 1;
   }
 
-  // a sigil (@ / $) followed by an identifier → a ref or part-param token.
+  // `@` or `$` followed by an identifier -> a ref or part-param token.
   private scanSigil(start: number, kind: Tk, prefix: string): void {
     const { source } = this; let end = this.index + 1; let name = '';
     while (end < source.length && isWord(source[end])) { name += source[end]; end++; }
     this.push(kind, prefix + name, start); this.index = end;
   }
 
-  // a two-char operator from OPERATORS; returns false (no advance) if none matches here.
+  // Returns false (no advance) if no two-char operator from OPERATORS matches here.
   private scanOperator(start: number): boolean {
     const pair = this.source.slice(this.index, this.index + 2);
     const op = OPERATORS.find(([text]) => text === pair);
@@ -86,7 +85,7 @@ class Lexer {
     return true;
   }
 
-  // integer or decimal (leading '-' allowed): consume digits, then an optional .digits.
+  // Integer or decimal; leading `-` allowed. Consumes digits then an optional `.digits`.
   private scanNumber(start: number): void {
     const { source } = this; let end = this.index + (source[this.index] === Pn.Dash ? 1 : 0);
     while (end < source.length && isDigit(source[end])) end++;
@@ -94,7 +93,7 @@ class Lexer {
     this.push(Tk.Number, source.slice(this.index, end), start); this.index = end;
   }
 
-  // an identifier or keyword (letters/digits/_).
+  // Identifier or keyword: letters, digits, and `_`.
   private scanWord(start: number): void {
     const { source } = this; let end = this.index;
     while (end < source.length && isWord(source[end])) end++;

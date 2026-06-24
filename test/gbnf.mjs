@@ -21,9 +21,9 @@ Page style(padding.lg, gap.md) {
   Title "Count: {count}" h1
   Button "+1" -> inc
 }`,
-  'Link navigates with -> /route':
+  'Link navigates with -> "/route"':
 `screen home
-Page { Link "Sign Up" -> /signup }`,
+Page { Link "Sign Up" -> "/signup" }`,
   'when + entity + form':
 `screen signup
 entity User { name text required  email email required }

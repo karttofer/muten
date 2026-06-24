@@ -1,9 +1,8 @@
-// manifest — the SINGLE source of the language's vocabulary AND its documentation.
-//
-// Consulted by: parse (positional string-props + which primitives interpolate), validate (required
-// props, known types/ops), and the VS Code extension's autocomplete + hovers. Each primitive carries
-// a one-line `doc` + a completion `snippet`, so the surface and its help never drift apart. Adding or
-// changing the language starts HERE (and its codegen in compile/), then re-run the highlight generator.
+// manifest: single source of the language vocabulary and its documentation.
+// Consulted by parse (positional string-props, interpolating primitives), validate (required
+// props, known types/ops), and the VS Code extension (autocomplete + hovers). Each primitive
+// carries a `doc` and a `snippet` so the surface and its help never drift apart.
+// Language changes start here (and in compile/), then re-run the highlight generator.
 
 import { SUGGESTED, resolveToken } from '#engine/style/tokens.js';
 import type { Primitive } from '#engine/shared/types.js';
@@ -62,7 +61,7 @@ export const PRIMITIVES: { [name: string]: Primitive } = {
   SearchField: {
     string: 'placeholder', props: { bind: 'state', placeholder: 'text?' }, children: false,
     doc: 'Search input two-way bound to a text state.',
-    snippet: 'SearchField bind @${1:search} "${2:Search by name}"',
+    snippet: 'SearchField bind(${1:search}) "${2:Search by name}"',
   },
   DataTable: {
     props: { data: 'state', where: 'clauses?', columns: 'fields', style: 'tokens?' }, children: true,
@@ -82,12 +81,12 @@ export const PRIMITIVES: { [name: string]: Primitive } = {
   Form: {
     string: 'submitLabel', props: { bind: 'state', submit: 'action', submitLabel: 'text?' }, children: false,
     doc: 'Auto-form: one field per entity field, two-way bound to a draft state.',
-    snippet: 'Form bind @${1:draft} submit ${2:createItem} "${3:Save}"',
+    snippet: 'Form bind(${1:draft}) submit(${2:createItem}) "${3:Save}"',
   },
   Link: {
     string: 'label', props: { label: 'text?', to: 'route', style: 'tokens?' }, children: true, interp: true,
-    doc: 'Navigation link: `Link "Catalog" -> /catalog`. Label interpolates, OR use `{ }` children for a clickable card that navigates. Client-side (no full reload).',
-    snippet: 'Link "${1:label}" -> /${2:route}',
+    doc: 'Navigation link: `Link "Catalog" -> "/catalog"`. Label interpolates, OR use `{ }` children for a clickable card that navigates. Client-side (no full reload).',
+    snippet: 'Link "${1:label}" -> "/${2:route}"',
   },
   slot: {
     props: {}, children: false,
@@ -124,7 +123,7 @@ export const MODIFIER_DOCS = {
   on: 'Custom component events wired to actions: `on(select: pick)`.',
 };
 
-export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'every', 'live', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'where', 'and', 'or', 'not', 'contains', 'use'];
+export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'every', 'live', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'where', 'by', 'with', 'and', 'or', 'not', 'contains', 'use', 'from'];
 export const KEYWORD_DOCS = {
   screen: 'Declares the screen name: `screen users_dashboard`.',
   entity: 'Declares a data shape + validation: `entity User { name text required  email email required  password text min:8 }` (implicit uuid id). Constraints: `required`, `min:N`, `max:N`.',

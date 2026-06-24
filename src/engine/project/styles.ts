@@ -1,10 +1,7 @@
-// The PROJECT's stylesheet for a page — the bring-your-own-look escape hatch.
-//
-// Convention: COLOCATED next to the page, same name, different extension:
-//   .../home/home.muten  →  .../home/home.css  (or home.scss)
-//
-// muten imposes no theme. This CSS is injected AFTER the engine's token CSS, so it wins via the
-// cascade. `.css` is zero-dependency; `.scss` needs the OPTIONAL `sass` package (only if you use it).
+// styles: resolves the per-page stylesheet colocated with its .muten file.
+// Convention: same name, different extension (home.muten -> home.css or home.scss).
+// Injected after the engine's token CSS so it wins via the cascade.
+// .scss requires the optional `sass` package; .css is zero-dependency. Consumed by load.ts.
 
 import { readFileSync, existsSync } from 'node:fs';
 import { basename } from 'node:path';

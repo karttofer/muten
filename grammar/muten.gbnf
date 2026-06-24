@@ -29,7 +29,7 @@ stmt        ::= ifstmt | requeststmt | callstmt
 ifstmt      ::= "if" sp expr ws actionbody (ws "else" ws actionbody)?
 requeststmt ::= ("post" | "put" | "delete") sp string (sp "body" sp expr)?
 callstmt    ::= ident "." actionop "(" ws callargs ws ")"
-actionop    ::= "push" | "remove" | "patch" | "reset" | "set" | "create" | "update" | "delete" | "refetch"
+actionop    ::= "push" | "remove" | "patch" | "reset" | "toggle" | "set" | "create" | "update" | "delete" | "refetch"
 callargs    ::= refetcharg (ws "," ws refetcharg)* | predarg | expr | ""
 refetcharg  ::= ident ws ":" ws expr
 predarg     ::= ident ws "=>" ws expr
@@ -38,7 +38,7 @@ node       ::= whennode | eachnode | linknode | actionnode | customnode | plainn
 whennode   ::= "when" sp expr ws block
 eachnode   ::= "each" sp expr sp "as" sp ident ws block
 block      ::= "{" ws (node ws)* "}"
-linknode   ::= "Link" (sp (commonpart | "->" ws path))* (ws block)?
+linknode   ::= "Link" (sp (commonpart | "->" ws string))* (ws block)?
 actionnode ::= ("RowAction" | "Button") (sp (commonpart | actionarrow))* (ws block)?
 actionarrow ::= "->" ws dotted (ws "(" ws expr? ws ")")?
 customnode ::= "Custom" sp ident (sp modifier)*
@@ -68,9 +68,6 @@ atom       ::= "row" | "column" | "wrap" | "grid" | "grow" | "center" | "between
 family     ::= "gap" | "padding" | "margin" | "cols" | "rows" | "text" | "weight" | "leading" | "align" | "justify" | "items" | "width" | "height"
 tokenmod   ::= ("x." | "y.")? scaleseg
 scaleseg   ::= ident | number
-
-path    ::= ("/" pathseg?)+
-pathseg ::= ident | "{" ws expr ws "}"
 
 # expressions — the parser's precedence ladder (no left recursion: iterate, don't self-reference first)
 expr      ::= ternary

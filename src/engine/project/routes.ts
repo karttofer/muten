@@ -1,6 +1,6 @@
-// The app's routes — src/app.muten `routes { /url -> page }`. Single source of truth the AI reads.
-// REQUIRED: no app.muten, no app. Throws on bad input (the CLI formats + exits).
-// Parsed by the real engine parser (same as the editor lints) — no regex hack.
+// routes: reads src/app.muten and returns typed route + api entries.
+// Uses the real engine parser (same path as the linter) so the CLI and editor never disagree.
+// Throws with a formatted message on missing app.muten or bad input. Consumed by build.ts and map.ts.
 import { readFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parse } from '#engine/lang/parse.js';
@@ -26,7 +26,7 @@ export function readRoutes(appRoot: string): RouteEntry[] {
   return routes;
 }
 
-// The app-wide backend config from app.muten `api { base, headers }` ({} if none) — applied to every `sources`.
+// App-wide backend config from app.muten `api { base, headers }` ({} if none), applied to every `sources`.
 export function readApi(appRoot: string): { [name: string]: Value } {
   const root = join(appRoot, 'src', 'app.muten');
   if (!existsSync(root)) return {};

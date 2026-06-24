@@ -1,6 +1,6 @@
-// The app graph (app.map.json) — routes → file / models / state / sources — derived WITHOUT compiling.
-// `muten map` emits it COLD (parse + flatten only, no build/SSR), so an AI can read ONE file in a fresh
-// conversation and know the whole app. The build reuses `routeEntry` for the same shape (one definition).
+// map: builds app.map.json (routes -> file, models, state, sources) without compiling.
+// "muten map" runs cold (parse + flatten only, no build/SSR) so an AI reads one file to know the whole app.
+// routeEntry is shared with build.ts to keep the shape consistent. Consumed by the CLI map command.
 
 import { relative } from 'node:path';
 import { readRoutes } from '#engine/project/routes.js';
@@ -8,7 +8,7 @@ import { load, loadAllParts } from '#engine/project/load.js';
 import { sourceRequest } from '#engine/shared/source.js';
 import type { AppMap, Doc, Value } from '#engine/shared/types.js';
 
-// one route's entry, from a loaded page (no compile). Shared by build.ts + mapApp so the shape can't drift.
+// One route entry from a loaded page (no compile). Shared by build.ts and mapApp so the shape never drifts.
 export function routeEntry(file: string, doc: Doc, sources: { [name: string]: Value }): AppMap['routes'][string] {
   return {
     file,
@@ -18,7 +18,7 @@ export function routeEntry(file: string, doc: Doc, sources: { [name: string]: Va
   };
 }
 
-// The whole app graph from disk, cold — parse + flatten each page (no compile, no SSR, no dist).
+// The whole app graph from disk, cold: parse + flatten each page (no compile, no SSR, no dist).
 export async function mapApp(appRoot: string): Promise<AppMap> {
   const parts = await loadAllParts(appRoot);
   const pages = readRoutes(appRoot);

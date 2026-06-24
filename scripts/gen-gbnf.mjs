@@ -65,7 +65,7 @@ node       ::= whennode | eachnode | linknode | actionnode | customnode | plainn
 whennode   ::= "when" sp expr ws block
 eachnode   ::= "each" sp expr sp "as" sp ident ws block
 block      ::= "{" ws (node ws)* "}"
-linknode   ::= ${alt(LINK)} (sp (commonpart | "->" ws path))* (ws block)?
+linknode   ::= ${alt(LINK)} (sp (commonpart | "->" ws string))* (ws block)?
 actionnode ::= (${alt(ACTION)}) (sp (commonpart | actionarrow))* (ws block)?
 actionarrow ::= "->" ws dotted (ws "(" ws expr? ws ")")?
 customnode ::= "Custom" sp ident (sp modifier)*
@@ -95,9 +95,6 @@ atom       ::= ${alt(ATOM_NAMES)}
 family     ::= ${alt(FAMILY_NAMES)}
 tokenmod   ::= ("x." | "y.")? scaleseg
 scaleseg   ::= ident | number
-
-path    ::= ("/" pathseg?)+
-pathseg ::= ident | "{" ws expr ws "}"
 
 # expressions — the parser's precedence ladder (no left recursion: iterate, don't self-reference first)
 expr      ::= ternary

@@ -1,11 +1,12 @@
-// Emit targets: assemble the pre-computed pieces (an EmitParts) into the final output of each
-// format — self-contained HTML, an ESM page module, an ESM store slice, or a static page.
-// The async data layer is written ONCE here (dataLayer) and shared by every runtime format.
+// emit.ts: assembles pre-computed EmitParts into the final output for each format.
+// Formats: self-contained HTML, ESM page module, ESM store slice, static page.
+// The data layer (dataLayer) is written once and shared by every runtime format.
+// Consumed by compile.ts as the last step of the compile pipeline.
 
 import type { EmitParts } from '#engine/shared/types.js';
 import { sourceRequest, sourceRows } from '#engine/shared/source.js';
 
-// the fine-grained signals runtime, inlined into the standalone HTML format (no bundler there).
+// Fine-grained signals runtime, inlined into the standalone HTML format (no bundler there).
 export const RUNTIME = `// ── fine-grained signals runtime (~18 lines, no dependencies) ──
   let __current = null;   // the effect currently tracking signal reads
   let __owner = null;     // collects effects created in a scope so a keyed-list item can dispose its effects together
@@ -37,10 +38,9 @@ export const RUNTIME = `// ── fine-grained signals runtime (~18 lines, no de
   function __lisSet(arr) { const p = arr.slice(); const result = [0]; let i, j, u, v, c; const len = arr.length; for (i = 0; i < len; i++) { const a = arr[i]; if (a !== 0) { j = result[result.length - 1]; if (arr[j] < a) { p[i] = j; result.push(i); continue; } u = 0; v = result.length - 1; while (u < v) { c = (u + v) >> 1; if (arr[result[c]] < a) u = c + 1; else v = c; } if (a < arr[result[u]]) { if (u > 0) p[i] = result[u - 1]; result[u] = i; } } } u = result.length; v = result[u - 1]; while (u-- > 0) { result[u] = v; v = p[v]; } return new Set(result); }
   function __order(parent, ref0, next, prev) { const n = next.length; if (!n) return; const pi = new Map(); for (let i = 0; i < prev.length; i++) pi.set(prev[i], i + 1); const oldIdx = new Array(n); let moved = false, max = 0; for (let i = 0; i < n; i++) { const o = pi.get(next[i]) || 0; oldIdx[i] = o; if (o !== 0) { if (o < max) moved = true; else max = o; } } const ls = moved ? __lisSet(oldIdx) : null; let ref = ref0; for (let i = n - 1; i >= 0; i--) { const e = next[i]; if (oldIdx[i] === 0 || (ls && !ls.has(i))) { for (const node of e.nodes) parent.insertBefore(node, ref); } ref = e.nodes[0] || ref; } }`;
 
-// The data layer: a query is a RICH reactive signal { data, loading, error }. Real `sources` fetch over
-// HTTP (the full request — method/headers/body); otherwise a mock with a small delay so loading/error are
-// visible. `__req`/`__rows` are inlined from engine/shared/source.ts (the SAME functions the build uses)
-// so build-time SSG and runtime fetching are byte-for-byte identical.
+// The data layer: a query is a reactive signal { data, loading, error }. Real `sources` fetch over
+// HTTP; otherwise a mock with a small delay so loading/error states are visible. `__req`/`__rows`
+// are inlined from engine/shared/source.ts so build-time SSG and runtime fetching are identical.
 function dataLayer(parts: EmitParts): string {
   return `const __DATA = ${JSON.stringify(parts.data)};
   const __SOURCES = ${JSON.stringify(parts.sources)};
@@ -57,7 +57,7 @@ function dataLayer(parts: EmitParts): string {
   function query(name, live) { const sig = signal({ data: [], loading: true, error: null }); if (live) { const q = __req(__SOURCES[name], __API); const ws = new WebSocket(q.url); ws.onmessage = (e) => sig.set({ data: __fill(name, __rows(JSON.parse(e.data), q.at)), loading: false, error: null }); ws.onerror = () => sig.set({ ...sig.get(), loading: false, error: 'socket error' }); onCleanup(() => ws.close()); } else { __fetch(name).then((d) => sig.set({ data: d, loading: false, error: null })).catch((e) => sig.set({ data: [], loading: false, error: String(e) })); } return sig; }`;
 }
 
-// one .store DOMAIN slice → shared ESM module (state + get + actions, no DOM).
+// One .store domain slice -> shared ESM module (state + get + actions, no DOM).
 export function emitStore(parts: EmitParts): string {
   return `import { signal, computed, effect, root, onCleanup, __eq, __id, __has, __order } from 'virtual:muten/runtime';
 ${parts.externImports}
@@ -74,7 +74,7 @@ ${parts.effectDecls}
 `;
 }
 
-// a static page (no reactivity): plain HTML, NO runtime import, NO signals (Astro-like zero-JS).
+// Static page (no reactivity): plain HTML, no runtime import, no signals (Astro-like zero-JS).
 export function emitStatic(parts: EmitParts): string {
   return `export const screen = ${JSON.stringify(parts.screen)};
 export const css = ${JSON.stringify(`${parts.tokenCss}\n${parts.projectCss}`)};
@@ -83,9 +83,9 @@ export function mount(app) { app.innerHTML = ${JSON.stringify(parts.staticHtml)}
 `;
 }
 
-// SSR factory (build-time only): the same pieces as emitHtml's script, but data resolves SYNCHRONOUSLY
-// (mock rows, no fetch/delay) and it builds into the `app` it's handed instead of getElementById — so the
-// build can run it against a fake DOM (see project/ssr.ts) and serialize real markup for a reactive page.
+// SSR factory (build-time only): same pieces as emitHtml's script, but data resolves synchronously
+// (mock rows, no fetch/delay) and builds into the `app` passed in instead of getElementById, so
+// the build can run it against a fake DOM (see project/ssr.ts) and serialize real markup.
 export function emitSsr(parts: EmitParts): string {
   return `${RUNTIME}
   let __seq = 0;
@@ -111,8 +111,8 @@ export function emitSsr(parts: EmitParts): string {
   return app;`;
 }
 
-// the <head> tag set for a page's meta: <title> + <meta name|property=…> (og:* uses property). Shared by
-// both self-contained HTML formats; the og:* derivation already happened at compile (one source, no DRY).
+// <head> tags for a page's meta: <title> + <meta name|property=...> (og:* uses property).
+// Shared by both self-contained HTML formats; og:* derivation already happened at compile time.
 function metaTags(meta: { [k: string]: string }, screen: string): string {
   const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const out = [`<title>${esc(meta.title || screen)}</title>`];
@@ -123,9 +123,8 @@ function metaTags(meta: { [k: string]: string }, screen: string): string {
   return out.join('\n');
 }
 
-// a static page as a self-contained HTML document — pre-rendered content, NO runtime, NO JS (SSG).
-// The SEO/first-paint path for the CLI build: crawlers and the browser get real markup at the real URL,
-// not an empty #app filled by script. A page with any reactivity falls back to emitHtml (CSR) instead.
+// Static page as a self-contained HTML document: pre-rendered content, no runtime, no JS (SSG).
+// SEO/first-paint path for the CLI build. A page with any reactivity falls back to emitHtml (CSR).
 export function emitStaticHtml(parts: EmitParts): string {
   return `<!doctype html>
 <html lang="en">
@@ -147,7 +146,7 @@ ${parts.staticHtml}
 `;
 }
 
-// an ESM page module Vite bundles (npm imports, HMR, SPA).
+// ESM page module Vite bundles (npm imports, HMR, SPA).
 export function emitModule(parts: EmitParts): string {
   return `import { signal, computed, effect, root, onCleanup, __eq, __id, __has, __order } from 'virtual:muten/runtime';
 ${parts.storeImports}
@@ -175,7 +174,7 @@ export function mount(app, __params) {
 `;
 }
 
-// a self-contained HTML document (the runtime is inlined; the browser runs it directly).
+// Self-contained HTML document: runtime inlined, browser runs it directly.
 export function emitHtml(parts: EmitParts): string {
   return `<!doctype html>
 <html lang="en">

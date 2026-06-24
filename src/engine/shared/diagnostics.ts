@@ -1,9 +1,7 @@
-// Structured diagnostics — the compiler's error/suggestion language.
-//
-// Because the compiler knows the WHOLE vocabulary (types, tokens, state, ops), it does
-// not emit generic errors: it proposes the closest candidate ("did you mean ...?").
-// Shaped for an editor (squiggles) or for the AI (auto-fix). This is the foundation of
-// the LSP that comes next.
+// diagnostics: structured error/suggestion types for the compile pipeline.
+// Knows the whole vocabulary (types, tokens, state, ops), so errors are specific and
+// propose the closest candidate. Shaped for editors (squiggles) and AI (auto-fix).
+// Consumed by validate, the linter, `muten lint`, and Vite.
 
 import type { Loc, Diagnostic, DiagOpts } from '#engine/shared/types.js';
 
@@ -14,18 +12,17 @@ export class ParseError extends Error {
     super(message);
     this.name = 'ParseError';
     this.code = 'syntax';
-    this.loc = loc || null; // { line, col }
+    this.loc = loc || null;
   }
 }
 
-// structured diagnostic: { code, severity, message, loc, suggestion, fix, related }. A `from` + a `suggestion`
-// auto-build the `fix` (the deterministic replacement an AI applies).
+// `from` + `suggestion` together auto-build the `fix` (deterministic replacement an AI can apply).
 export function diag(code: string, message: string, opts: DiagOpts = {}): Diagnostic {
   const { loc = null, suggestion = null, severity = 'error', from = null, related = null } = opts;
   return { code, severity, message, loc, suggestion, fix: (from && suggestion) ? { from, to: suggestion } : null, related };
 }
 
-// closest candidate by edit distance (Levenshtein) → the suggestion
+// Closest candidate by edit distance (Levenshtein), used to populate `suggestion`.
 export function closest(target: string, candidates: Iterable<string>, maxDist = 3): string | null {
   let best: string | null = null;
   let bestD = Infinity;
@@ -50,7 +47,7 @@ function lev(a: string, b: string): number {
   return row[b.length];
 }
 
-// CLI format:  file:line:col  error  [code]  message  → did you mean "x"?
+// CLI format: file:line:col  severity  [code]  message  -> did you mean "x"?
 export function formatDiagnostic(d: Diagnostic, file: string): string {
   const where = d.loc ? `${file}:${d.loc.line}:${d.loc.col}` : file;
   const hint = d.suggestion ? `  → did you mean "${d.suggestion}"?` : '';

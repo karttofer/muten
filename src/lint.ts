@@ -1,6 +1,6 @@
-// Lint / check: parse + validate every page of a host app, WITHOUT compiling. The deterministic ORACLE
-// an AI consults instead of running a browser — `--json` returns the structured diagnostics (code + loc +
-// "did you mean…?" suggestion) in milliseconds. Returns the problem count (the CLI exits non-zero if > 0).
+// lint: parse + validate every page of a host app without compiling.
+// The deterministic oracle for AI agents: `--json` returns structured diagnostics
+// (code, loc, suggestion) in milliseconds. Returns problem count; CLI exits non-zero if > 0.
 
 import { join, relative } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
@@ -16,7 +16,7 @@ import type { Diagnostic } from '#engine/shared/types.js';
 export async function lintApp(appRoot: string, json = false): Promise<number> {
   const rel = (p: string) => relative(appRoot, p);
   const sharedParts = await loadParts(join(appRoot, 'src', 'parts'));
-  const storeIRs = findStores(join(appRoot, 'src'));             // store domains + their members → validate cart.add / cart.count
+  const storeIRs = findStores(join(appRoot, 'src'));             // store domains + members needed to validate cross-page refs like cart.add / cart.count
   const stores = Object.keys(storeIRs);
   const storeMembers: { [d: string]: string[] } = {};
   for (const [d, ir] of Object.entries(storeIRs)) storeMembers[d] = [...Object.keys(ir.state || {}), ...Object.keys(ir.gets || {}), ...Object.keys(ir.actions || {})];
@@ -29,7 +29,7 @@ export async function lintApp(appRoot: string, json = false): Promise<number> {
       const { doc, partNames } = await load(page.screenPath, sharedParts);
       diagnostics = validate(doc, { parts: partNames, stores, storeMembers }).diagnostics;
     } catch (e) {
-      if (!(e instanceof ParseError)) throw e;             // a syntax error is one diagnostic; anything else is a bug
+      if (!(e instanceof ParseError)) throw e;             // a syntax error becomes one diagnostic; anything else is a real bug
       diagnostics = [{ code: e.code, severity: 'error', message: e.message, loc: e.loc, suggestion: null }];
     }
     for (const d of diagnostics) {
@@ -37,7 +37,7 @@ export async function lintApp(appRoot: string, json = false): Promise<number> {
       found.push({ file: rel(page.screenPath), ...d });
     }
   }
-  // the shell (app.muten) wraps every route → validate its store refs too (e.g. the navbar's cart count)
+  // app.muten wraps every route, so validate its store refs too (e.g. the navbar's cart count)
   const appFile = join(appRoot, 'src', 'app.muten');
   if (existsSync(appFile)) {
     try {
@@ -48,10 +48,10 @@ export async function lintApp(appRoot: string, json = false): Promise<number> {
           found.push({ file: rel(appFile), ...d });
         }
       }
-    } catch (e) { if (!(e instanceof ParseError)) throw e; } // a syntax error surfaces via the pages' load
+    } catch (e) { if (!(e instanceof ParseError)) throw e; } // a parse error surfaces via the page load; rethrow real errors
   }
 
-  // .store bodies + route guards — SHARED with `build` (check-app.ts) so check and build never disagree.
+  // .store bodies + route guards: shared with `build` via check-app.ts so check and build never disagree.
   for (const d of validateStoresAndGuards(appRoot, storeIRs, storeMembers)) {
     if (!json) console.log(formatDiagnostic(d, d.file));
     found.push(d);

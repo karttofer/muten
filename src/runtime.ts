@@ -1,13 +1,13 @@
-// Fine-grained signals runtime — the only Muten code that ships to the browser, shared by every
-// compiled .muten module. The Vite plugin serves it as the virtual module `virtual:muten/runtime`;
+// runtime.ts: fine-grained signals runtime, the only Muten code that ships to the browser.
+// Shared by every compiled .muten module. Vite serves it as `virtual:muten/runtime`;
 // the standalone HTML format inlines an equivalent. No dependencies, ~50 lines.
 
 import type { Signal, EffectRun, PageModule, RouteDef } from '#engine/shared/types.js';
 
-let current: EffectRun | null = null;            // the effect currently running (so reads can subscribe it)
-let owner: Array<EffectRun | (() => void)> | null = null;   // effects AND onCleanup teardowns created in the current scope → disposed together
+let current: EffectRun | null = null;            // effect currently running, so reads can subscribe it
+let owner: Array<EffectRun | (() => void)> | null = null;   // effects + onCleanup teardowns in the current scope, disposed together
 
-// A reactive cell. Reading it inside an effect subscribes that effect; writing notifies subscribers.
+// Reactive cell: reading inside an effect subscribes it; writing notifies subscribers.
 export function signal<T>(value: T): Signal<T> {
   const subs = new Set<EffectRun>();
   return {
@@ -16,37 +16,37 @@ export function signal<T>(value: T): Signal<T> {
   };
 }
 
-// Batching (Solid-style): many sets in one tick flush their effects ONCE, in a microtask — so a burst
-// of updates (a real-time feed) re-renders each spot a single time. Computed effects are `sync` (run
-// immediately) so a `get` read elsewhere in the same tick is never stale.
+// Batching (Solid-style): many sets in one tick flush effects once, in a microtask, so a burst
+// of updates re-renders each spot a single time. Computed effects are `sync` (run immediately)
+// so a `get` read elsewhere in the same tick is never stale.
 let pending: Set<EffectRun> | null = null;
 function flush(): void { const runs = pending; pending = null; if (runs) for (const run of runs) run(); }
 function schedule(run: EffectRun): void { if (!pending) { pending = new Set(); queueMicrotask(flush); } pending.add(run); }
 
-// Run `fn`, tracking every signal it reads; re-run it whenever any of those signals changes.
+// Runs `fn`, tracking every signal it reads; re-runs whenever any of those signals changes.
 export function effect(fn: () => void, sync?: boolean): EffectRun {
   const run: EffectRun = Object.assign(
     () => {
       if (run.disposed) return;
-      for (const dep of run.deps) dep.delete(run); // drop last run's subscriptions before re-tracking
+      for (const dep of run.deps) dep.delete(run); // drop previous subscriptions before re-tracking
       run.deps.clear();
       const prev = current; current = run;
       try { fn(); } finally { current = prev; }
     },
     { deps: new Set<Set<EffectRun>>(), disposed: false, sync },
   );
-  if (owner) owner.push(run); // belongs to the page currently mounting → disposable on navigation
+  if (owner) owner.push(run); // belongs to the current scope, disposable on unmount/navigation
   run();
   return run;
 }
 
-// Run `fn`, collecting every effect it creates, and return a disposer that stops them all. The router
-// uses this so an unmounted page's effects stop firing on shared store signals (cart/ui) — otherwise
-// they touch detached DOM (anchor.parentNode === null) and crash the whole UI.
+// Runs `fn`, collecting every effect it creates, and returns a disposer that stops them all.
+// The router uses this so an unmounted page's effects stop firing on shared store signals,
+// avoiding detached-DOM crashes (anchor.parentNode === null).
 function disposeOwned(owned: Array<EffectRun | (() => void)>): void {
   for (const o of owned) {
-    if ('deps' in o) { o.disposed = true; for (const dep of o.deps) dep.delete(o); o.deps.clear(); } // an effect
-    else o(); // an onCleanup teardown (a keyed list disposing its rows, a when disposing its block)
+    if ('deps' in o) { o.disposed = true; for (const dep of o.deps) dep.delete(o); o.deps.clear(); } // effect
+    else o(); // onCleanup teardown (keyed list disposing rows, when disposing its block)
   }
 }
 export function root<T>(fn: () => T): { value: T; dispose: () => void } {
@@ -57,13 +57,13 @@ export function root<T>(fn: () => T): { value: T; dispose: () => void } {
 export function scope(fn: () => void): () => void { return root(fn).dispose; }
 export function onCleanup(fn: () => void): void { if (owner) owner.push(fn); }
 
-// `a contains b`: list membership OR case-insensitive substring — one operator, both meanings.
+// `a contains b`: list membership or case-insensitive substring, one operator for both.
 export function __has<T>(a: readonly T[] | string | null | undefined, b: T): boolean {
   if (Array.isArray(a)) return a.includes(b);
   return String(a ?? '').toLowerCase().includes(String(b ?? '').toLowerCase());
 }
 
-// Shallow value equality — keyed reconciliation skips rows whose data didn't change.
+// Shallow value equality: keyed reconciliation uses this to skip rows whose data didn't change.
 export function __eq(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
@@ -73,15 +73,15 @@ export function __eq(a: unknown, b: unknown): boolean {
   return true;
 }
 
-// ── keyed-list reconciliation: position the new order with the MINIMUM number of DOM moves, via the
-// longest increasing subsequence (like Vue/Svelte/Solid). A 2-row swap moves 2 nodes, not O(n). ──
+// Keyed-list reconciliation: positions the new order with the minimum DOM moves via the
+// longest increasing subsequence (like Vue/Svelte/Solid). A 2-row swap moves 2 nodes, not O(n).
 function __lisSet(arr: number[]): Set<number> {
   const p = arr.slice();
   const result: number[] = [0];
   const len = arr.length;
   for (let i = 0; i < len; i++) {
     const a = arr[i];
-    if (a === 0) continue; // 0 = a new row; not part of the existing increasing run
+    if (a === 0) continue; // 0 means a new row, not part of the existing increasing run
     const j = result[result.length - 1];
     if (arr[j] < a) { p[i] = j; result.push(i); continue; }
     let u = 0, v = result.length - 1;
@@ -93,29 +93,29 @@ function __lisSet(arr: number[]): Set<number> {
   return new Set(result);
 }
 
-/** Reorder `next` (the new row entries) under `parent` with the fewest DOM moves; `prev` is the previous order. */
+// Reorder `next` (new row entries) under `parent` with the fewest DOM moves; `prev` is the old order.
 export function __order(parent: Node, ref0: Node, next: { nodes: ChildNode[] }[], prev: { nodes: ChildNode[] }[]): void {
   const n = next.length;
   if (!n) return;
   const pi = new Map<{ nodes: ChildNode[] }, number>();
-  for (let i = 0; i < prev.length; i++) pi.set(prev[i], i + 1); // 1-based; 0 stays "new"
+  for (let i = 0; i < prev.length; i++) pi.set(prev[i], i + 1); // 1-based so 0 stays "new"
   const oldIdx = new Array<number>(n);
   let moved = false, max = 0;
   for (let i = 0; i < n; i++) { const o = pi.get(next[i]) || 0; oldIdx[i] = o; if (o !== 0) { if (o < max) moved = true; else max = o; } }
-  const ls = moved ? __lisSet(oldIdx) : null; // only compute the LIS when rows actually reordered
+  const ls = moved ? __lisSet(oldIdx) : null; // compute LIS only when rows actually reordered
   let ref: Node = ref0;
   for (let i = n - 1; i >= 0; i--) {
     const e = next[i];
-    if (oldIdx[i] === 0 || (ls && !ls.has(i))) { for (const node of e.nodes) parent.insertBefore(node, ref); } // new, or not in the stable subsequence → move
+    if (oldIdx[i] === 0 || (ls && !ls.has(i))) { for (const node of e.nodes) parent.insertBefore(node, ref); } // new, or not in the stable subsequence: move
     ref = e.nodes[0] || ref;
   }
 }
 
-// A derived/memoized value (a store `get`): recomputes when the signals it reads change. Seeded once
-// eagerly (a `get` is pure), then kept current by an effect that tracks its dependencies.
+// Derived/memoized value (a store `get`): recomputes when the signals it reads change.
+// Seeded eagerly, then kept current by a sync effect that tracks its dependencies.
 export function computed<T>(fn: () => T): Signal<T> {
   const cell = signal(fn());
-  effect(() => cell.set(fn()), true); // sync: a `get` read in the same tick is always fresh (no batching glitch)
+  effect(() => cell.set(fn()), true); // sync: a `get` read in the same tick is always fresh
   return cell;
 }
 
@@ -124,7 +124,7 @@ export function __id(): string {
   return (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'id-' + (++seq);
 }
 
-// Inject a page/shell stylesheet once, deduped by content (so re-mounting a route doesn't pile up <style>s).
+// Injects a page/shell stylesheet once, deduped by content (re-mounting a route doesn't pile up <style>s).
 const injected = new Set<string>();
 export function injectCss(css: string): void {
   if (!css || injected.has(css)) return;
@@ -134,7 +134,7 @@ export function injectCss(css: string): void {
   document.head.appendChild(style);
 }
 
-// Apply a page's `meta` to <head>: set the title and upsert each meta tag (og:* → property, else name).
+// Applies a page's `meta` to <head>: sets the title and upserts each meta tag (og:* -> property, else name).
 export function applyMeta(meta: { [key: string]: string }): void {
   if (meta.title) document.title = meta.title;
   for (const name in meta) {
@@ -146,15 +146,15 @@ export function applyMeta(meta: { [key: string]: string }): void {
   }
 }
 
-// History router: real-path URLs (`/about`, `/product/42`). Intercepts internal <a> clicks for client-side
-// navigation, syncs on popstate, scrolls to top, applies each page's <head> meta, and falls back to the
-// first route as a soft 404. A guard is a () => boolean over a store signal; when it flips the tracking
-// effect re-runs, so routes + navbar react to auth automatically. (Deploy: serve index.html for any path.)
+// History router: real-path URLs (/about, /product/42). Intercepts internal <a> clicks, syncs on
+// popstate, scrolls to top, applies each page's <head> meta, and falls back to the first route as a
+// soft 404. A guard is a () => boolean over a store signal; when it flips the tracking effect re-runs,
+// so routes + navbar react to auth automatically. (Deploy: serve index.html for any path.)
 export function route(outlet: Element, routes: { [path: string]: RouteDef }): void {
   const keys = Object.keys(routes);
-  // pre-split each route key into segments; a ":x" segment matches any value and captures it as `x`.
+  // pre-split each route key into segments; a ":x" segment matches any value and captures it as x.
   const patterns = keys.map((key) => ({ key, segs: key.replace(/^\//, '').split('/').filter(Boolean) }));
-  // match a path to a route + capture its `:params`; fall back to the first route (a soft 404).
+  // match a path to a route, capture its :params; fall back to the first route (soft 404).
   const matchRoute = (path: string): { def: RouteDef; params: { [k: string]: string } } => {
     const parts = path.replace(/^\//, '').split('/').filter(Boolean);
     for (const { key, segs } of patterns) {
@@ -167,22 +167,22 @@ export function route(outlet: Element, routes: { [path: string]: RouteDef }): vo
       }
       if (ok) return { def: routes[key], params };
     }
-    return { def: routes['/404'] || routes[keys[0]], params: {} }; // no match → a `/404` page if defined, else the first route
+    return { def: routes['/404'] || routes[keys[0]], params: {} }; // no match: `/404` page if defined, else the first route
   };
-  let mounted: string | null = null;        // path currently shown (don't re-mount on every auth tick)
+  let mounted: string | null = null;        // path currently shown, to avoid re-mounting on every auth tick
   let disposePage: (() => void) | null = null;
   const go = (to: string): void => { if (to !== location.pathname) { history.pushState({}, '', to); mounted = null; render(); } };
   const render = (): void => {
     const path = location.pathname || keys[0];
     const { def, params } = matchRoute(path);
-    if (def.guard && !def.guard()) {          // unauthorized → redirect (replaceState, then re-render)
+    if (def.guard && !def.guard()) {          // unauthorized: redirect (replaceState, then re-render)
       const to = def.redirect ?? '/';
       if (location.pathname !== to) { history.replaceState({}, '', to); mounted = null; render(); }
       return;
     }
     if (path === mounted) return;
     mounted = path;
-    if (disposePage) disposePage();           // stop the previous page's effects → no stale-DOM crashes
+    if (disposePage) disposePage();           // stop the previous page's effects to avoid stale-DOM crashes
     disposePage = null;
     outlet.replaceChildren();
     scrollTo(0, 0);
@@ -192,7 +192,7 @@ export function route(outlet: Element, routes: { [path: string]: RouteDef }): vo
       disposePage = scope(() => { module.mount(outlet, params); });
     });
   };
-  // intercept internal link clicks → client-side navigation (external / new-tab / downloads pass through)
+  // intercept internal link clicks for client-side navigation (external/new-tab/downloads pass through)
   addEventListener('click', (e: Event) => {
     const t = e.target;
     if (!(t instanceof Element)) return;
@@ -204,6 +204,6 @@ export function route(outlet: Element, routes: { [path: string]: RouteDef }): vo
     go(href);
   });
   addEventListener('popstate', () => { mounted = null; render(); });
-  // track every guard signal so logging in/out re-renders the active route automatically.
+  // tracking every guard signal ensures logging in/out re-renders the active route automatically.
   effect(() => { for (const key of keys) { const guard = routes[key].guard; if (guard) guard(); } render(); });
 }

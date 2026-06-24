@@ -1,14 +1,7 @@
-// ============================================================================
-// Muten engine — core domain types
-// ============================================================================
-// The contracts every stage passes around: parse → flatten → validate → compose
-// → compile. Inferred from the engine code and the original JS in _engine_bak.
-//
-// House rule (strict & honest): NO `any`, NO `unknown`, NO `as`, NO phantom
-// `Record<string, string>`. Every shape is named. Open-keyed maps (user-chosen
-// names → a definition) use an index signature whose VALUE is a real type.
-// String/keyword/operator constants live in vocab.ts (no magic strings).
-// ============================================================================
+// types: core domain contracts for the engine compile pipeline (parse -> flatten -> validate ->
+// compose -> compile). Consumed by every stage. Strict and honest: no `any`, no `unknown`,
+// no `as`, no phantom Record. Open-keyed maps use index signatures with real value types.
+// String/keyword/operator constants live in vocab.ts.
 
 import type { Tk, BOp, UOp, Ek, StOp, Fmt, Fk } from '#engine/shared/vocab.js';
 
@@ -57,8 +50,7 @@ export interface Loc {
 
 // ── 3. Tokenizer ─────────────────────────────────────────────────────────────
 
-/** Every lexeme kind the tokenizer emits. */
-/** A token stores `pos` = its start index in the source (→ line/col on demand). */
+/** A token stores `pos` = its start index in the source (line/col resolved on demand). */
 export interface Token {
   t: Tk;
   v: string;   // raw text value (numbers are kept as their source text)
@@ -73,7 +65,7 @@ export interface Cursor {
 
 
 // ── 4. Expression AST ────────────────────────────────────────────────────────
-// The shared expression grammar: conditions, arithmetic, ternaries, interpolation.
+// Shared expression grammar: conditions, arithmetic, ternaries, interpolation.
 
 export interface LitExpr { kind: Ek.Lit; value: Scalar; }
 export interface RefExpr { kind: Ek.Ref; name: string; }
@@ -82,9 +74,9 @@ export interface BinExpr { kind: Ek.Bin; op: BOp; left: Expr; right: Expr; }
 export interface TernExpr { kind: Ek.Tern; cond: Expr; then: Expr; else: Expr; }
 /** A call to a `use`'d JS function: `fmt(date, "…")`. `fn` is the imported name; never a muten primitive. */
 export interface CallExpr { kind: Ek.Call; fn: string; args: Expr[]; }
-export interface ObjExpr { kind: Ek.Obj; fields: Array<{ key: string; value: Expr }>; } // inline object literal: `{ title: @draft.title, qty: 1 }`
-export interface AggExpr { kind: Ek.Agg; op: string; list: string; body: Expr; } // `lines.sum by price * qty` / `tasks.count where not done` — item-implicit (fields read bare off the row)
-export interface FilterExpr { kind: Ek.Filter; list: string; cond: Expr; } // derived list: `tasks where status == "todo"` — item fields referenced bare (item-implicit)
+export interface ObjExpr { kind: Ek.Obj; fields: Array<{ key: string; value: Expr }>; } // inline object literal, e.g. `{ title: @draft.title, qty: 1 }`
+export interface AggExpr { kind: Ek.Agg; op: string; list: string; body: Expr; } // e.g. `lines.sum by price * qty` (item-implicit: fields read bare off the row)
+export interface FilterExpr { kind: Ek.Filter; list: string; cond: Expr; } // derived list, e.g. `tasks where status == "todo"` (item-implicit)
 export type Expr = LitExpr | RefExpr | UnExpr | BinExpr | TernExpr | CallExpr | ObjExpr | AggExpr | FilterExpr;
 
 /** A `use a, b from "./lib.ts"` — named JS functions muten may call. The seam to the JS ecosystem. */
@@ -107,14 +99,14 @@ export type StringPropName = 'value' | 'label' | 'src' | 'alt' | 'placeholder' |
 
 
 // ── 5. Action / effect statements ────────────────────────────────────────────
-// A mutation in an action body (or a `.store` effect), as a discriminated union.
+// Discriminated union of mutations in an action body or a `.store` effect.
 
 export interface PushStmt { op: StOp.Push; target: string; arg: Expr; }
 export interface SetStmt { op: StOp.Set; target: string; arg: Expr; }
 export interface ResetStmt { op: StOp.Reset; target: string; }
-export interface ToggleStmt { op: StOp.Toggle; target: string; } // flip a bool state: `open.toggle()` → `open.set(!open)`
-export interface RemoveStmt { op: StOp.Remove; target: string; pred: Expr; } // `tasks.remove where id == taskId` — item fields read bare (item-implicit)
-export interface PatchStmt { op: StOp.Patch; target: string; pred: Expr; patch: Expr; } // `tasks.patch where id == taskId with { done: true }` → position-preserving map (item fields bare)
+export interface ToggleStmt { op: StOp.Toggle; target: string; } // `open.toggle()` -> `open.set(!open)`
+export interface RemoveStmt { op: StOp.Remove; target: string; pred: Expr; } // e.g. `tasks.remove where id == taskId` (item-implicit)
+export interface PatchStmt { op: StOp.Patch; target: string; pred: Expr; patch: Expr; } // e.g. `tasks.patch where id == taskId with { done: true }`, position-preserving (item-implicit)
 /** Server CRUD on a source-backed list: POST/PUT/DELETE the item, then reflect the result in the list. */
 export interface CreateStmt { op: StOp.Create; target: string; arg: Expr; }
 export interface UpdateStmt { op: StOp.Update; target: string; arg: Expr; }
@@ -123,7 +115,7 @@ export interface DeleteStmt { op: StOp.Delete; target: string; arg: Expr; }
 export interface RefetchStmt { op: StOp.Refetch; target: string; params: { [k: string]: Expr }; }
 /** Explicit non-REST request (escape hatch): `post "shop:/orders" body item`, `delete "shop:/x/{id}"`. */
 export interface RequestStmt { op: StOp.Request; method: string; url: string | Interp; body: Expr | null; }
-export interface CallStmt { op: StOp.Call; target: string; method: string; args: Expr[]; } // a page action calling a STORE action: `shop.addProduct(draft)` (composition)
+export interface CallStmt { op: StOp.Call; target: string; method: string; args: Expr[]; } // page action calling a store action, e.g. `shop.addProduct(draft)`
 export interface IfStmt { op: StOp.If; cond: Expr; then: Stmt[]; else: Stmt[] | null; }
 export type Stmt = (PushStmt | SetStmt | ResetStmt | ToggleStmt | RemoveStmt | PatchStmt | CreateStmt | UpdateStmt | DeleteStmt | RefetchStmt | RequestStmt | CallStmt | IfStmt) & { loc?: Loc };
 
@@ -133,12 +125,12 @@ export type Stmt = (PushStmt | SetStmt | ResetStmt | ToggleStmt | RemoveStmt | P
 /** The serialized field-type tag the parser stores. */
 export type EnumType = `enum:${string}`;
 export type ListType = `list<${string}>`;
-// known scalar tags + enum/list encodings; `(string & {})` also admits an entity-name field
-// type (e.g. `author User`) while keeping the known tags as autocomplete hints — still honest
-// (the stored value genuinely is a string), never `any`/`unknown`.
+// Known scalar tags + enum/list encodings. `(string & {})` also admits entity-name field
+// types (e.g. `author User`) while keeping known tags as autocomplete hints. Still honest:
+// the stored value is genuinely a string, never `any`/`unknown`.
 export type FieldType = 'uuid' | 'string' | 'number' | 'bool' | 'email' | EnumType | ListType | (string & {});
 
-// heading level for Title (structure, not style).
+// Heading level for Title (structure, not style).
 export type Level = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
 
 /** An entity: field name → its type tag (always carries an implicit `id: 'uuid'`). */
@@ -158,16 +150,19 @@ export interface EntityConstraints { [field: string]: FieldConstraint; }
 
 /** A reactive state (page-local `state {}` or app-global `store {}`). */
 export interface StateDef {
-  type: string;       // declared type tag: scalar | list<X> | an entity name
+  type: string;       // declared type tag: scalar, list<X>, or an entity name
   source?: string;    // "query:<name>" for async query-backed state
-  refresh?: number;   // (parked) `query x every Ns` — polling was rejected; kept only so it still parses
-  live?: boolean;     // `query x live` → a WebSocket subscription (server pushes); the socket closes via onCleanup
+  refresh?: number;   // parked: `query x every Ns` (polling rejected, kept so it still parses)
+  live?: boolean;     // `query x live` -> a WebSocket subscription (server pushes); socket closes via onCleanup
   initial?: Value;    // declared initial literal (when not query-backed)
   loc?: Loc;
 }
 
-/** The value of a part-instance arg: a literal/ref string, a number, or a $param. */
-export type ArgValue = string | number | ParamRef;
+/** A quoted literal passed as a part/Custom arg. Kept distinct from a bare ref string so compose
+ *  substitutes "Send" as text, not as a dangling reference to a variable named Send. */
+export interface LitRef { $lit: string; }
+/** The value of a part-instance arg: a quoted literal, a bare ref string, a number, or a $param. */
+export type ArgValue = string | number | ParamRef | LitRef;
 /** key → arg value, for part instances and Custom inputs/on. */
 export interface ArgMap { [key: string]: ArgValue; }
 
@@ -184,7 +179,7 @@ export interface PartDef {
 }
 
 /** A declared action: which state it may mutate, its input name, and its body.
- *  `params` (when set) is the multi-param form `action f(a: T, b: T)`; `input` is the legacy `<- v` form. */
+ *  `params` is the multi-param form `action f(a: T, b: T)`; `input` is the legacy `<- v` form. */
 export interface ActionDef {
   mutates: string[];
   input: string;
@@ -192,7 +187,7 @@ export interface ActionDef {
   body: Stmt[];
 }
 
-/** One route line from `routes { /url -> page [guard [not] store.flag else /path] }`. */
+/** One route line: `routes { /url -> page [guard [not] store.flag else /path] }`. */
 export interface Route {
   url: string;
   page: string;
@@ -233,24 +228,24 @@ export interface NodeProps {
   level?: Level;
   component?: string;
   data?: string;
-  to?: string | Interp;  // a route path; interpolated (`/product/{p.id}`) for dynamic navigation
+  to?: string | Interp;  // route path; interpolated (e.g. `/product/{p.id}`) for dynamic navigation
   action?: string;
   arg?: Expr;
-  argRest?: Expr[];  // 2nd+ args of a multi-arg call `-> f(a, b, c)` (arg holds the 1st); single-arg calls leave this unset
+  argRest?: Expr[];  // 2nd+ args of `-> f(a, b, c)` (`arg` holds the 1st); unset for single-arg calls
   bind?: string;
   submit?: string;
   // modifiers
   where?: string[];
   columns?: string[];
   style?: string[];
-  class?: Array<string | ClassCond>;   // static look classes + reactive toggles (`active when isOpen`)
+  class?: Array<string | ClassCond>;   // static look classes + reactive toggles, e.g. `active when isOpen`
   inputs?: ArgMap;
   on?: ArgMap;
   // control flow (When/Each)
   cond?: Expr;
   list?: Expr;
   as?: string;
-  filter?: Expr;  // `each x as i where <cond>` — render only items matching cond (kills the each+when leak)
+  filter?: Expr;  // `each x as i where <cond>` -> render only matching items (avoids the each+when nesting leak)
 }
 
 /** A nested authoring node (before flatten); also the shape parts/shell hold. */
@@ -258,11 +253,11 @@ export interface IRNode {
   type: string;
   props?: NodeProps;
   children?: IRNode[];
-  args?: ArgMap;   // unresolved part instance: Name(arg: value)
+  args?: ArgMap;   // unresolved part instance args: Name(arg: value)
   loc?: Loc;
 }
 
-/** The nested IR the parser produces. Optional members are added as the grammar meets them. */
+/** The nested IR the parser produces. Optional members are populated as the grammar encounters them. */
 export interface IR {
   screen: string;
   entities: { [name: string]: Entity };
@@ -271,19 +266,19 @@ export interface IR {
   tree: IRNode | null;
   store?: { [name: string]: StateDef };          // app-global state slice
   gets?: { [name: string]: Expr };               // .store derived/memoized values
-  effects?: Stmt[][];                            // .store reactive side-effects (each = a body)
+  effects?: Stmt[][];                            // .store reactive side-effects (each entry = one body)
   constraints?: { [entity: string]: EntityConstraints };
   mock?: { [name: string]: Value };              // inline test data
-  sources?: { [name: string]: Value };           // real data sources (raw; the plugin reads them as Source)
+  sources?: { [name: string]: Value };           // real data sources (raw; plugin reads them as Source)
   api?: { [name: string]: Value };               // app-wide backend config (base URL + default headers)
   routes?: Route[];
   shell?: IRNode;
   parts?: { [name: string]: PartDef };
   consts?: { [name: string]: Scalar };           // compile-time immutable scalars
   theme?: { [scale: string]: ThemeScale };       // project theme (raw blocks)
-  params?: string[];                             // route params a page declares (`param id`), injected at mount
-  meta?: { [k: string]: string };                // page <head> metadata (title/description → tags + og)
-  imports?: ImportDef[];                         // `use a, b from "./lib.ts"` — named JS functions to call
+  params?: string[];                             // route params declared by the page (`param id`), injected at mount
+  meta?: { [k: string]: string };                // page <head> metadata (title/description -> tags + og)
+  imports?: ImportDef[];                         // `use a, b from "./lib.ts"` -> named JS functions to call
 }
 
 
@@ -296,7 +291,7 @@ export interface FlatNode {
   props: NodeProps;
   children: string[];
   loc?: Loc;
-  args?: ArgMap;  // unresolved part instance (live-lint without compose)
+  args?: ArgMap;  // unresolved part instance args (live-lint path, before compose)
 }
 
 /** The canonical flat doc — the only thing validated, mutated and compiled. */
@@ -313,22 +308,22 @@ export interface Doc {
   effects?: Stmt[][];
   params?: string[];   // route params declared by the page (`param id`)
   meta?: { [k: string]: string };   // page <head> metadata (title/description)
-  imports?: ImportDef[];   // `use a, b from "./lib.ts"` — named JS functions the page may call
+  imports?: ImportDef[];   // `use a, b from "./lib.ts"` -> named JS functions the page may call
 }
 
 
 // ── 10. Diagnostics ──────────────────────────────────────────────────────────
 
 export type Severity = 'error' | 'warning' | 'info';
-export interface Fix { from: string; to: string; } // a deterministic replacement: swap `from` for `to` at the diagnostic's loc
+export interface Fix { from: string; to: string; } // deterministic replacement: swap `from` for `to` at the diagnostic's loc
 export interface Diagnostic {
   code: string;
   severity: Severity;
   message: string;
   loc: Loc | null;
   suggestion: string | null;
-  fix?: Fix | null;       // auto-apply: the exact text to replace (when a suggestion exists), so an AI fixes it deterministically
-  related?: Loc | null;   // where the referenced symbol is declared (navigation), when known
+  fix?: Fix | null;       // exact text to replace when a suggestion exists (AI applies deterministically)
+  related?: Loc | null;   // declaration loc of the referenced symbol (for navigation), when known
 }
 export interface ValidateResult {
   ok: boolean;
@@ -339,7 +334,7 @@ export interface DiagOpts {
   loc?: Loc | null;
   suggestion?: string | null;
   severity?: Severity;
-  from?: string | null;    // the bad token → with `suggestion` becomes a `fix` { from, to }
+  from?: string | null;    // the bad token; with `suggestion` this becomes a `fix` { from, to }
   related?: Loc | null;    // declaration loc of the referenced symbol
 }
 
@@ -357,13 +352,12 @@ export interface CompileOpts {
   format?: Fmt;
   theme?: Theme;
   stores?: { [domain: string]: StoreSlice };
-  storeCode?: string;                // standalone-build only: the `.store` slices INLINED (the CLI SSG has no virtual modules → `muten build` must bake the store code into the page itself)
+  storeCode?: string;                // standalone build only: `.store` slices inlined (CLI SSG has no virtual modules -> `muten build` bakes them into the page)
   api?: { [name: string]: Value };   // app-wide backend config (base + default headers) applied to `sources`
 }
 
-/** One screen's resolved compile context — the shared state the DOM half (compile.ts) and the
- *  logic half (logic.ts) both read. `usedStores` is mutable: refs/actions add the domains they
- *  touch, and compile.ts emits an import for each. */
+/** One screen's resolved compile context shared by compile.ts (DOM) and logic.ts.
+ *  `usedStores` is mutable: refs/actions add the domains they touch; compile.ts emits an import for each. */
 export interface CompileCtx {
   state: { [name: string]: StateDef };
   entities: { [name: string]: Entity };
@@ -371,11 +365,11 @@ export interface CompileCtx {
   consts: { [name: string]: Scalar };
   gets: { [name: string]: Expr };
   effects: Stmt[][];
-  stateKeys: Set<string>;     // names of all local states (for `.get()` resolution)
-  queryStates: Set<string>;   // states backed by a query (rich { data, loading, error } signals)
+  stateKeys: Set<string>;     // all local state names (for `.get()` resolution)
+  queryStates: Set<string>;   // states backed by a query (expose { data, loading, error } signals)
   stores: { [domain: string]: StoreSlice };
-  usedStores: Set<string>;    // store domains actually referenced (→ import list)
-  params: Set<string>;        // route params (`param id`) — resolve to a local string injected at mount
+  usedStores: Set<string>;    // store domains actually referenced (-> import list)
+  params: Set<string>;        // route params (`param id`) -> local string injected at mount
   format?: Fmt;
 }
 
@@ -391,7 +385,7 @@ export interface StoreInput {
   actions?: { [name: string]: ActionDef };
   effects?: Stmt[][];
   entities?: { [name: string]: Entity };
-  imports?: ImportDef[];                          // `use fmt from "./lib.ts"` — else a store's use'd calls have no import (ReferenceError)
+  imports?: ImportDef[];                          // `use fmt from "./lib.ts"` -> without this, use'd calls in a store have no import (ReferenceError)
 }
 
 /** The pre-computed pieces an emit target assembles into the final output (HTML/module/store). */
@@ -411,8 +405,8 @@ export interface EmitParts {
   effectDecls: string;
   componentDecls: string;
   storeImports: string;
-  storeDecls: string;      // standalone HTML/SSR only: the `.store` slices inlined as `const __store_X = (…)()`
-  externImports: string;   // `import { fmt } from "./lib.ts"` for each logic-function `use` declaration
+  storeDecls: string;      // standalone HTML/SSR only: `.store` slices inlined as `const __store_X = (...)()`
+  externImports: string;   // `import { fmt } from "./lib.ts"` for each `use` declaration
   renderBody: string;
   staticHtml: string;
   hasSlot: boolean;
@@ -425,7 +419,7 @@ export type FileKind = 'page' | 'store' | 'app' | 'part' | 'theme';
 export interface ValidateCtx {
   parts?: string[];
   stores?: string[];
-  storeMembers?: { [domain: string]: string[] };  // each store's members (state + gets + actions) → catch `cart.kount`
+  storeMembers?: { [domain: string]: string[] };  // each store's members (state + gets + actions) -> catch typos like `cart.kount`
   theme?: Theme;
   kind?: FileKind;
 }
@@ -433,10 +427,10 @@ export interface ValidateCtx {
 /** A lexical scope while compiling expressions: lambda locals + the action input. */
 export interface Scope {
   locals: Set<string>;
-  sigLocals?: Set<string>;   // keyed-each row vars backed by a per-row signal → refs compile to `<v>.get()` so bindings stay live
+  sigLocals?: Set<string>;   // keyed-each row vars backed by a per-row signal -> refs compile to `<v>.get()` so bindings stay live
   input?: string;
   inputIsState?: boolean;
-  item?: { var: string; fields: Set<string> };  // a `<list> where <cond>` filter: bare field refs resolve to `<var>.<field>` (item-implicit)
+  item?: { var: string; fields: Set<string> };  // `<list> where <cond>` filter: bare field refs resolve to `<var>.<field>` (item-implicit)
 }
 
 
@@ -492,7 +486,7 @@ export interface RouteDef { load(): Promise<PageModule>; guard?: () => boolean; 
 /** Options for the Vite plugin: store auto-detection on/off + an optional inline theme. */
 export interface MutenOptions { store?: boolean; theme?: { [scale: string]: ThemeScale }; }
 
-/** The generated app graph build emits to app.map.json — "the root the AI reads". */
+/** The app graph the build emits to app.map.json: the root the AI reads for context. */
 export interface AppMap {
   app: string;
   parts: string[];

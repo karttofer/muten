@@ -1,13 +1,7 @@
-// ============================================================================
-// Muten lexical & grammar vocabulary
-// ============================================================================
-// The single, typed source for every string the parser matches or builds. No
-// magic strings anywhere downstream: token kinds, punctuation, keywords, node
-// types, operators, statement ops and modifiers all have a NAME here.
-//
-// String enums (their members are assignable to `string`, so they double as the
-// `v` argument of at()/eat() and compare cleanly against scanned identifiers).
-// ============================================================================
+// vocab: single typed source for every string the parser matches or emits.
+// No magic strings downstream: token kinds, punctuation, keywords, node types,
+// operators, statement ops, and modifiers all have a name here. String enums are
+// used so members are assignable to `string` and compare cleanly in at()/eat().
 
 /** Token kinds the lexer emits. */
 export enum Tk {
@@ -27,7 +21,7 @@ export enum Tk {
   Eof = 'eof',
 }
 
-/** Single-character punctuation — the `v` of a Punct token. */
+/** Single-character punctuation: the `v` of a Punct token. */
 export enum Pn {
   BraceL = '{', BraceR = '}',
   ParenL = '(', ParenR = ')',
@@ -81,14 +75,14 @@ export enum UOp { Not = 'not' }
 /** Expression AST node kinds (discriminants). */
 export enum Ek { Lit = 'lit', Ref = 'ref', Un = 'un', Bin = 'bin', Tern = 'tern', Interp = 'interp', Call = 'call', Obj = 'obj', Agg = 'agg', Filter = 'filter' }
 
-// list aggregates: `list.sum by expr` (projection) / `list.count where cond` (predicate) / avg / min / max.
-// Item-implicit (fields read bare, like a `where`-filter); `.length` stays the count-all.
+// List aggregates: `list.sum by expr` (projection) / `list.count where cond` (predicate).
+// Item-implicit (fields read bare, like a `where` filter); `.length` stays the count-all.
 export const AGG_OPS = new Set<string>(['sum', 'count', 'avg', 'min', 'max']);
-// list sort: `contacts.sort by name` (asc) / `scores.sortDesc by points` (desc). Same item-implicit `by`
-// projection (reuses AggExpr), but RETURNS A LIST (used in `each` / a `get`), not a scalar.
+// List sort: `contacts.sort by name` (asc) / `scores.sortDesc by points` (desc).
+// Same item-implicit `by` projection (reuses AggExpr), but returns a list, not a scalar.
 export const SORT_OPS = new Set<string>(['sort', 'sortDesc']);
 
-/** Action-body statement ops (discriminants) — mutations + the `if` branch. */
+/** Action-body statement ops (discriminants): mutations + the `if` branch. */
 export enum StOp { Push = 'push', Set = 'set', Reset = 'reset', Toggle = 'toggle', Remove = 'remove', Patch = 'patch', Create = 'create', Update = 'update', Delete = 'delete', Refetch = 'refetch', Request = 'request', Call = 'call', If = 'if' }
 
 /** Node modifiers (post-primitive). */
