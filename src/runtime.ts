@@ -73,6 +73,44 @@ export function __eq(a: unknown, b: unknown): boolean {
   return true;
 }
 
+// ── keyed-list reconciliation: position the new order with the MINIMUM number of DOM moves, via the
+// longest increasing subsequence (like Vue/Svelte/Solid). A 2-row swap moves 2 nodes, not O(n). ──
+function __lisSet(arr: number[]): Set<number> {
+  const p = arr.slice();
+  const result: number[] = [0];
+  const len = arr.length;
+  for (let i = 0; i < len; i++) {
+    const a = arr[i];
+    if (a === 0) continue; // 0 = a new row; not part of the existing increasing run
+    const j = result[result.length - 1];
+    if (arr[j] < a) { p[i] = j; result.push(i); continue; }
+    let u = 0, v = result.length - 1;
+    while (u < v) { const c = (u + v) >> 1; if (arr[result[c]] < a) u = c + 1; else v = c; }
+    if (a < arr[result[u]]) { if (u > 0) p[i] = result[u - 1]; result[u] = i; }
+  }
+  let u = result.length, v = result[u - 1];
+  while (u-- > 0) { result[u] = v; v = p[v]; }
+  return new Set(result);
+}
+
+/** Reorder `next` (the new row entries) under `parent` with the fewest DOM moves; `prev` is the previous order. */
+export function __order(parent: Node, ref0: Node, next: { nodes: ChildNode[] }[], prev: { nodes: ChildNode[] }[]): void {
+  const n = next.length;
+  if (!n) return;
+  const pi = new Map<{ nodes: ChildNode[] }, number>();
+  for (let i = 0; i < prev.length; i++) pi.set(prev[i], i + 1); // 1-based; 0 stays "new"
+  const oldIdx = new Array<number>(n);
+  let moved = false, max = 0;
+  for (let i = 0; i < n; i++) { const o = pi.get(next[i]) || 0; oldIdx[i] = o; if (o !== 0) { if (o < max) moved = true; else max = o; } }
+  const ls = moved ? __lisSet(oldIdx) : null; // only compute the LIS when rows actually reordered
+  let ref: Node = ref0;
+  for (let i = n - 1; i >= 0; i--) {
+    const e = next[i];
+    if (oldIdx[i] === 0 || (ls && !ls.has(i))) { for (const node of e.nodes) parent.insertBefore(node, ref); } // new, or not in the stable subsequence → move
+    ref = e.nodes[0] || ref;
+  }
+}
+
 // A derived/memoized value (a store `get`): recomputes when the signals it reads change. Seeded once
 // eagerly (a `get` is pure), then kept current by an effect that tracks its dependencies.
 export function computed<T>(fn: () => T): Signal<T> {

@@ -181,18 +181,19 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`body_${id}.appendChild(start_${id}); body_${id}.appendChild(anchor_${id});`);
         lines.push(`const map_${id} = new Map();`);
         lines.push(`onCleanup(() => { for (const __e of map_${id}.values()) __e.dispose(); map_${id}.clear(); });   // parent unmount → tear down every row`);
+        lines.push(`let order_${id} = [];`);
         lines.push(`effect(() => {`);
         lines.push(`  const __rows = base_${id}()${dynExpr};`);
-        lines.push(`  const __seen = new Set();`);
-        lines.push(`  let __prev = start_${id};`);
+        lines.push(`  const __seen = new Set(); const __next = [];`);
         lines.push(`  for (const __row of __rows) {`);
         lines.push(`    const __k = __row?.id ?? __row; __seen.add(__k);   // key by id (entities) or the value itself (scalars) — never index`);
         lines.push(`    let __e = map_${id}.get(__k);`);
         lines.push(`    if (__e) { if (!__eq(__e.data, __row)) { __e.data = __row; __e.sig.set(__row); } }`);
         lines.push(`    else { const __sig = signal(__row); const __r = root(() => [renderRow_${id}(__sig)]); __e = { sig: __sig, nodes: __r.value, dispose: __r.dispose, data: __row }; map_${id}.set(__k, __e); }`);
-        lines.push(`    for (const __n of __e.nodes) { if (__prev.nextSibling !== __n) anchor_${id}.parentNode.insertBefore(__n, __prev.nextSibling); __prev = __n; }`);
+        lines.push(`    __next.push(__e);`);
         lines.push(`  }`);
         lines.push(`  for (const [__k, __e] of map_${id}) if (!__seen.has(__k)) { __e.dispose(); for (const __n of __e.nodes) __n.remove(); map_${id}.delete(__k); }`);
+        lines.push(`  __order(anchor_${id}.parentNode, anchor_${id}, __next, order_${id}); order_${id} = __next;   // minimal DOM moves (LIS)`);
         lines.push(`});`);
         break;
       }
@@ -332,18 +333,19 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`${parentVar}.appendChild(start_${id}); ${parentVar}.appendChild(anchor_${id});`);
         lines.push(`const map_${id} = new Map();   // row id → { sig, nodes, dispose, data }`);
         lines.push(`onCleanup(() => { for (const __e of map_${id}.values()) __e.dispose(); map_${id}.clear(); });   // parent unmount → tear down every row (no leaked effects)`);
+        lines.push(`let order_${id} = [];`);
         lines.push(`effect(() => {`);
         lines.push(`  const __rows = (${listJS} ?? [])${filterJS ? `.filter((${p.as}) => ${filterJS})` : ''};`);
-        lines.push(`  const __seen = new Set();`);
-        lines.push(`  let __prev = start_${id};`);
+        lines.push(`  const __seen = new Set(); const __next = [];`);
         lines.push(`  for (const __row of __rows) {`);
         lines.push(`    const __k = __row?.id ?? __row; __seen.add(__k);   // key by id (entities) or the value itself (scalars) — never index`);
         lines.push(`    let __e = map_${id}.get(__k);`);
         lines.push(`    if (__e) { if (!__eq(__e.data, __row)) { __e.data = __row; __e.sig.set(__row); } }   // same row, changed data → granular update`);
         lines.push(`    else { const __sig = signal(__row); const __r = root(() => { const __f = document.createDocumentFragment(); buildItem_${id}(__f, __sig); return [...__f.childNodes]; }); __e = { sig: __sig, nodes: __r.value, dispose: __r.dispose, data: __row }; map_${id}.set(__k, __e); }   // new row`);
-        lines.push(`    for (const __n of __e.nodes) { if (__prev.nextSibling !== __n) anchor_${id}.parentNode.insertBefore(__n, __prev.nextSibling); __prev = __n; }   // order: move only if out of place`);
+        lines.push(`    __next.push(__e);`);
         lines.push(`  }`);
         lines.push(`  for (const [__k, __e] of map_${id}) if (!__seen.has(__k)) { __e.dispose(); for (const __n of __e.nodes) __n.remove(); map_${id}.delete(__k); }   // gone → dispose effects + remove nodes`);
+        lines.push(`  __order(anchor_${id}.parentNode, anchor_${id}, __next, order_${id}); order_${id} = __next;   // position with the FEWEST DOM moves (LIS) — a swap moves 2 nodes, not O(n)`);
         lines.push(`});`);
         break;
       }

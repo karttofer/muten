@@ -33,7 +33,9 @@ export const RUNTIME = `// ── fine-grained signals runtime (~18 lines, no de
   function onCleanup(fn) { if (__owner) __owner.push(fn); }   // register a teardown with the current owner (a keyed list disposes all its rows; a when disposes its block)
   function computed(fn) { const s = signal(fn()); effect(() => s.set(fn()), true); return s; } // derived signal (store \`get\`) — sync so reads never go stale
   function __has(a, b) { return Array.isArray(a) ? a.includes(b) : String(a ?? '').toLowerCase().includes(String(b ?? '').toLowerCase()); }
-  function __eq(a, b) { if (a === b) return true; if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false; const __ka = Object.keys(a), __kb = Object.keys(b); if (__ka.length !== __kb.length) return false; for (const __k of __ka) if (a[__k] !== b[__k]) return false; return true; }`;
+  function __eq(a, b) { if (a === b) return true; if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false; const __ka = Object.keys(a), __kb = Object.keys(b); if (__ka.length !== __kb.length) return false; for (const __k of __ka) if (a[__k] !== b[__k]) return false; return true; }
+  function __lisSet(arr) { const p = arr.slice(); const result = [0]; let i, j, u, v, c; const len = arr.length; for (i = 0; i < len; i++) { const a = arr[i]; if (a !== 0) { j = result[result.length - 1]; if (arr[j] < a) { p[i] = j; result.push(i); continue; } u = 0; v = result.length - 1; while (u < v) { c = (u + v) >> 1; if (arr[result[c]] < a) u = c + 1; else v = c; } if (a < arr[result[u]]) { if (u > 0) p[i] = result[u - 1]; result[u] = i; } } } u = result.length; v = result[u - 1]; while (u-- > 0) { result[u] = v; v = p[v]; } return new Set(result); }
+  function __order(parent, ref0, next, prev) { const n = next.length; if (!n) return; const pi = new Map(); for (let i = 0; i < prev.length; i++) pi.set(prev[i], i + 1); const oldIdx = new Array(n); let moved = false, max = 0; for (let i = 0; i < n; i++) { const o = pi.get(next[i]) || 0; oldIdx[i] = o; if (o !== 0) { if (o < max) moved = true; else max = o; } } const ls = moved ? __lisSet(oldIdx) : null; let ref = ref0; for (let i = n - 1; i >= 0; i--) { const e = next[i]; if (oldIdx[i] === 0 || (ls && !ls.has(i))) { for (const node of e.nodes) parent.insertBefore(node, ref); } ref = e.nodes[0] || ref; } }`;
 
 // The data layer: a query is a RICH reactive signal { data, loading, error }. Real `sources` fetch over
 // HTTP (the full request — method/headers/body); otherwise a mock with a small delay so loading/error are
@@ -57,7 +59,7 @@ function dataLayer(parts: EmitParts): string {
 
 // one .store DOMAIN slice → shared ESM module (state + get + actions, no DOM).
 export function emitStore(parts: EmitParts): string {
-  return `import { signal, computed, effect, root, onCleanup, __eq, __id, __has } from 'virtual:muten/runtime';
+  return `import { signal, computed, effect, root, onCleanup, __eq, __id, __has, __order } from 'virtual:muten/runtime';
 ${parts.externImports}
 
   ${dataLayer(parts)}
@@ -147,7 +149,7 @@ ${parts.staticHtml}
 
 // an ESM page module Vite bundles (npm imports, HMR, SPA).
 export function emitModule(parts: EmitParts): string {
-  return `import { signal, computed, effect, root, onCleanup, __eq, __id, __has } from 'virtual:muten/runtime';
+  return `import { signal, computed, effect, root, onCleanup, __eq, __id, __has, __order } from 'virtual:muten/runtime';
 ${parts.storeImports}
 ${parts.externImports}
 export const screen = ${JSON.stringify(parts.screen)};
