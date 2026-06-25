@@ -90,6 +90,9 @@ const TH = mergeTheme({ space: { sm: '8px', md: '16px', lg: '24px' }, font: { lg
   ok('static: uses innerHTML', code.includes('innerHTML'));
   ok('static: no signals/effects', !code.includes('signal(') && !code.includes('effect('));
   ok('static: emits @media for bp token', code.includes('@media (min-width:768px)'), '');
+  // breakpoint rule DOUBLES its class selector for specificity → a responsive override beats a same-property
+  // base token even when that base token is re-emitted by a later-loaded page bundle (load-order race).
+  ok('bp rule doubles class for specificity', code.includes('@media (min-width:768px){.t-md-cols-2.t-md-cols-2{'), '');
 }
 // theme is a PROJECT concern: a passed theme overrides the engine's default scale
 {

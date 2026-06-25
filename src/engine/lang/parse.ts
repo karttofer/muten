@@ -364,7 +364,7 @@ export class Parser extends Grammar {
       const scale = this.eat(Tk.Ident).v;            // e.g. space, font, weight, leading, breakpoints
       this.eat(Tk.Punct, Pn.BraceL);
       const steps: ThemeScale = {};
-      // step -> "value". A hyphenated key (DaisyUI's "base-100", "primary-content") is QUOTED, like a
+      // step -> "value". A hyphenated key (e.g. "base-100", "primary-content") is QUOTED, like a
       // hyphenated class name; a plain key (primary, md) stays bare.
       while (!this.at(Tk.Punct, Pn.BraceR)) steps[this.at(Tk.String) ? this.next().v : this.eat(Tk.Ident).v] = this.eat(Tk.String).v;
       this.eat(Tk.Punct, Pn.BraceR);

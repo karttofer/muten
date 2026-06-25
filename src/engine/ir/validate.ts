@@ -524,10 +524,10 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     for (const st of a.body || []) checkStmt(st);
   }
 
-  // styling under the oracle: validate every class() name against the framework's RESOLVED theme
-  // (Tailwind v4 Design System API, loaded by the orchestrator). Catches typos on theme tokens and
-  // utilities (`bg-primaryy`) + suggests the closest. Only runs with a framework present; base apps
-  // leave class() as the raw escape (no design system to check against).
+  // styling under the oracle: validate every class() name against the styling plugin's RESOLVED theme
+  // (a class validator the plugin supplies, loaded by the orchestrator). Catches typos on theme tokens
+  // and utilities (`bg-primaryy`) + suggests the closest. Only runs when a styling plugin is connected;
+  // base apps leave class() as the raw escape (no validator to check against).
   if (ctx.classValidator?.available) {
     for (const n of Object.values(nodes)) {
       if (!Array.isArray(n.props.class)) continue;

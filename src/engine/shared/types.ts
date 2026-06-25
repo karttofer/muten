@@ -215,7 +215,7 @@ export type ThemeRaw = { [section: string]: ThemeScale };
 /** A theme ADAPTER: pure DATA describing how to render theme.muten's values for ANY styling backend.
  *  The engine has zero per-library logic — a new library is just a new adapter (no engine change). */
 export interface ThemeBlock {
-  open: string;                       // block opener, e.g. `@plugin "daisyui/theme" {` | `@theme {` | `:root {`
+  open: string;                       // block opener — `:root {` by default, or whatever wrapper a styling plugin supplies
   close: string;                      // usually `}`
   attrs?: { [key: string]: string };  // literal lines inside (e.g. name/default); value `$scheme` -> theme.scheme.mode
   sections: string[];                 // which theme.muten sections render in this block

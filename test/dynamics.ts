@@ -15,13 +15,19 @@ Page {
   Button "x" -> toggle
 }`)));
 ok('static class stays in className', js.includes('"mu-stack panel"'));
-ok('reactive class → classList.toggle effect', js.includes('.classList.toggle("active", !!(open.get()))'));
+ok('reactive class → classList.toggle effect (condition computed once)', js.includes('const __on = !!(open.get());') && js.includes('.classList.toggle("active", __on)'));
 ok('on(event: action) → addEventListener', js.includes('.addEventListener("mouseenter", () => toggle())'));
 
 // two separate class() modifiers MERGE (regression: a second class() used to overwrite, silently dropping the first)
 const mergeJs = compileModule(toDoc(parse('screen s\nstate { d = false : bool }\nPage class("chat-app") class(dark when d) { Text "x" }')));
 ok('multiple class() merge: static kept', mergeJs.includes('chat-app'));
-ok('multiple class() merge: reactive kept', mergeJs.includes('.classList.toggle("dark", !!(d.get()))'));
+ok('multiple class() merge: reactive kept', mergeJs.includes('.classList.toggle("dark", __on)'));
+
+// MULTI-TOKEN reactive class: `class("a b c" when cond)` must toggle EACH token separately — classList.toggle
+// throws on a token with spaces, so a single toggle("a b c") passes lint but blows up the render at runtime.
+const multiJs = compileModule(toDoc(parse('screen s\nstate { on = false : bool }\nPage class("ring-2 ring-primary ring-inset" when on) { Text "x" }')));
+ok('multi-token reactive class: per-token toggles', multiJs.includes('.classList.toggle("ring-2", __on)') && multiJs.includes('.classList.toggle("ring-primary", __on)') && multiJs.includes('.classList.toggle("ring-inset", __on)'));
+ok('multi-token reactive class: NO multi-token toggle (would throw at runtime)', !multiJs.includes('toggle("ring-2 ring-primary'));
 
 // a conditional class inside `each` resolves against the item local
 const eachJs = compileModule(toDoc(parse(`screen s
@@ -29,7 +35,7 @@ entity T { label text  done bool }
 state { items = query items : list<T> }
 sources { items: { url: "/x" } }
 Page { each items as it { Text "{it.label}" class(done when it.done) } }`)));
-ok('conditional class in each uses the item (reactive row signal)', eachJs.includes('.classList.toggle("done", !!(it.get().done))'));
+ok('conditional class in each uses the item (reactive row signal)', eachJs.includes('const __on = !!(it.get().done);') && eachJs.includes('.classList.toggle("done", __on)'));
 
 // dynamic navigation: `-> /product/{p.id}` → an interpolated href (reuses the Text interpolation machinery)
 const navJs = compileModule(toDoc(parse(`screen s

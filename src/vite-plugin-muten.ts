@@ -149,9 +149,9 @@ if (root) {
     },
 
     async transform(code: string, id: string) {
-      // theme.muten -> the TARGET library's NATIVE theme block, appended to the project stylesheet.
-      // `enforce: 'pre'` runs before @tailwindcss/vite. The adapter (which library + how to emit) comes
-      // from theme.muten's `target` resolved against presets / `muten({ adapters })` — engine knows no library.
+      // theme.muten -> a native theme block (or generic :root vars), appended to the project stylesheet.
+      // `enforce: 'pre'` runs before the user's styling Vite plugin. The adapter (how to emit) comes from
+      // `muten({ styling: { theme } })` — pure data in the user's config; the engine knows no library.
       const sheet = id.replace(/\\/g, '/').split('?')[0];
       if (sheet.endsWith('/styles.css') || sheet.endsWith('/styles.scss')) {
         const block = emitTheme(themeRaw, options.styling?.theme);

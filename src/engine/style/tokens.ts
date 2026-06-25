@@ -70,8 +70,8 @@ export function mergeTheme(theme: { [scale: string]: ThemeScale } = {}): Theme {
 // ── theme.muten -> CSS, AGNOSTICALLY. The core knows NO styling library ──────────────────────────
 // theme.muten holds the VALUES (agnostic). By default the engine emits them as plain CSS custom
 // properties on :root — universal, any CSS setup consumes them; the engine has zero per-library code.
-// A muten styling PLUGIN may pass an `adapter` (pure data) to render a library's own format (e.g.
-// DaisyUI's `@plugin`); the engine ships none and never expects a specific library.
+// A muten styling PLUGIN may pass an `adapter` (pure data) to render a library's own format (the plugin
+// supplies the wrapper block); the engine ships none and never expects a specific library.
 const GENERIC_PREFIX: { [section: string]: string } = {
   colors: '--color-', space: '--space-', radius: '--radius-', font: '--font-',
   weight: '--weight-', leading: '--leading-', breakpoints: '--breakpoint-', size: '--size-',

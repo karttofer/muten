@@ -43,10 +43,10 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   const usedTokens = new Set<string>();
   const classFor = (base: string, props: NodeProps): string => {
     for (const token of props.style || []) usedTokens.add(token);
-    // style() = analyzable Muten tokens; class() = raw CSS/Tailwind passed straight through.
+    // style() = analyzable Muten tokens; class() = raw CSS classes passed straight through.
     // conditional class (`name when cond`) is omitted here and toggled reactively by genDynamics.
     // Every primitive's base class is `mu-`-prefixed so muten NEVER collides with a CSS framework or
-    // your own classes (DaisyUI ships .stack/.footer/.link/.card…); your look goes through class().
+    // your own classes (a framework may ship its own .stack/.card/…); your look goes through class().
     return ['mu-' + base, ...(props.style || []).map(tokenClass), ...(props.class || []).filter((c): c is string => typeof c === 'string')].join(' ');
   };
 
@@ -66,7 +66,12 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
 
   // reactive element bits: conditional classes (`class(active when cond)`) + events (`on(keydown: fn)`).
   const genDynamics = (id: string, p: NodeProps): void => {
-    for (const c of p.class || []) if (typeof c !== 'string') lines.push(`effect(() => el_${id}.classList.toggle(${JSON.stringify(c.name)}, !!(${logic.compileExpr(c.cond, pageScope)})));`);
+    for (const c of p.class || []) if (typeof c !== 'string') {
+      // `class("a b c" when cond)` may hold MULTIPLE tokens; classList.toggle rejects a token with
+      // spaces, so split (at compile time) and toggle each with the condition computed once.
+      const toggles = c.name.trim().split(/\s+/).map((t) => `el_${id}.classList.toggle(${JSON.stringify(t)}, __on);`).join(' ');
+      lines.push(`effect(() => { const __on = !!(${logic.compileExpr(c.cond, pageScope)}); ${toggles} });`);
+    }
     for (const [event, act] of Object.entries(p.on || {})) {
       if (typeof act !== 'string') continue;
       if (event === 'enter') lines.push(`el_${id}.addEventListener('keydown', (e) => { if (e.key === 'Enter') ${logic.actionRef(act)}(); });`); // synthetic: Enter key only
@@ -468,9 +473,12 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   // (md:cols.3) is wrapped in its @media query.
   const tokenCss = [...usedTokens].map((token) => {
     const css = resolveToken(token, theme); if (!css) return '';
-    const rule = `.${tokenClass(token)}{${css}}`;
+    const cls = tokenClass(token);
     const colon = token.indexOf(':'); const bp = colon > 0 && theme.breakpoints[token.slice(0, colon)];
-    return bp ? `@media (min-width:${bp}){${rule}}` : rule;
+    // A breakpoint rule DOUBLES its class selector (`.c.c`) for higher specificity, so a responsive override
+    // always beats a same-property base token — even when that base token is re-emitted in a later-loaded
+    // page bundle (atomic classes aren't deduped across shell/pages, so otherwise load order would decide).
+    return bp ? `@media (min-width:${bp}){.${cls}.${cls}{${css}}}` : `.${cls}{${css}}`;
   }).filter(Boolean).join('\n');
 
   // host-written Custom components, inlined (each exposes `mount(el, props, on)`). Wrapped in an

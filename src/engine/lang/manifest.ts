@@ -117,7 +117,7 @@ export const MODIFIER_DOCS = {
   where: 'Filter clauses: `where(role == admin, name contains @q)`.',
   columns: 'Columns to show: `columns(name, email, role)`.',
   style: 'Layout & typography tokens (Muten builds, doesn’t skin): `style(row, gap.md, text.lg)`.',
-  class: 'Raw CSS class(es) for LOOK — your CSS or a third-party like Tailwind: `class(card)` or `class("flex gap-4")`. Muten stays agnostic about appearance.',
+  class: 'Raw CSS class(es) for LOOK — your CSS or a CSS framework: `class(card)` or `class("flex gap-4")`. Muten stays agnostic about appearance.',
   alt: 'Required accessible/SEO text for an Image: `alt "{p.title}"`. Use "" for decorative images.',
   inputs: 'Custom component inputs: `inputs(data: @sales)`.',
   on: 'Custom component events wired to actions: `on(select: pick)`.',
