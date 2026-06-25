@@ -80,5 +80,24 @@ const diagsOf = (src, ctx = {}) => validate(toDoc(parse(src)), ctx).diagnostics;
   check('diagnostic carries `related` (declaration loc)', !!fx?.related?.line, JSON.stringify(fx?.related));
 }
 
+// 9. `contains` on a list of ENTITIES (objects) with a scalar → always-false; the oracle catches it (was blind)
+{
+  const d = diagsOf('screen t\nentity F { symbol text }\nstate { favs = [] : list<F>  sym = "" : text }\nget x = favs contains sym').find((x) => x.code === 'contains-entity');
+  check('list<Entity> contains scalar detected', !!d, 'no diagnostic');
+  const okScalar = diagsOf('screen t\nstate { favs = [] : list<text>  sym = "" : text }\nget x = favs contains sym');
+  check('list<scalar> contains is clean (no false positive)', okScalar.every((x) => x.code !== 'contains-entity'), JSON.stringify(okScalar.map((d) => d.code)));
+}
+
+// 10. aggregate/sort OVER a derived `get` resolves the element's fields (was blind: `lt` ignored gets)
+{
+  const store = 'entity O { amount number  stage text }\nstate { opps = query opps : list<O> }\nmock { opps: [{ amount: 5, stage: "won" }] }\n';
+  const clean = diagsOf(store + 'get won = opps.data where stage == "won"\nget wonValue = won.sum by amount', { kind: 'store' });
+  check('sum over a get resolves item fields', clean.every((x) => x.code !== 'unknown-ref'), JSON.stringify(clean.map((d) => d.code)));
+  const chain = diagsOf(store + 'get a = opps.data where stage == "won"\nget b = a.sortDesc by amount\nget c = b.avg by amount', { kind: 'store' });
+  check('chained gets (filter->sort->avg) resolve', chain.every((x) => x.code !== 'unknown-ref'), JSON.stringify(chain.map((d) => d.code)));
+  const typo = diagsOf(store + 'get won = opps.data where stage == "won"\nget bad = won.sum by nope', { kind: 'store' }).find((x) => x.code === 'unknown-ref');
+  check('still flags a real field typo in the projection', !!typo, 'no diagnostic — over-permissive');
+}
+
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL OK');
 process.exit(fails ? 1 : 0);

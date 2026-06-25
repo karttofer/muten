@@ -17,13 +17,15 @@ state {
     { title: "D", status: "done",  points: 1 }
   ] : list<Issue>
 }
-get openCount = issues.count where status == "open"
-get points    = issues.sum by points
-get topPoints = issues.max by points
+get openCount  = issues.count where status == "open"
+get points     = issues.sum by points
+get topPoints  = issues.max by points
+get openIssues = issues where status == "open"
+get openPoints = openIssues.sum by points
 action advance(issueId: text) mutates issues { issues.patch where id == issueId with { status: "doing" } }
 action drop(issueId: text)    mutates issues { issues.remove where id == issueId }
 Page {
-  Text "open={openCount} pts={points} top={topPoints}" class("kpi")
+  Text "open={openCount} pts={points} top={topPoints} op={openPoints}" class("kpi")
   Stack class("open") {
     each issues as i where i.status == "open" {
       Stack class("row") {
@@ -79,20 +81,20 @@ const starts = () => registry.filter((e) => e.tag === 'button' && e.textContent 
 const drops = () => registry.filter((e) => e.tag === 'button' && e.textContent === 'drop' && isLive(e));
 
 await tick();
-assert('initial KPIs (count where / sum by / max by)', kpi(), 'open=2 pts=16 top=8');
+assert('initial KPIs (count where / sum by / max by / sum-over-a-get)', kpi(), 'open=2 pts=16 top=8 op=13');
 assert('open column rows (each … where)', rows().length, 2);
 
 // advance the first open issue → `patch where id == issueId with { status: "doing" }` moves it out of the column
 starts()[0].handlers.click();
 await tick();
 assert('after advance: open count', rows().length, 1);
-assert('after advance: KPIs recompute (open 2->1, pts unchanged)', kpi(), 'open=1 pts=16 top=8');
+assert('after advance: KPIs recompute (open 2->1, pts unchanged)', kpi(), 'open=1 pts=16 top=8 op=8');
 
 // drop the remaining open issue → `remove where id == issueId` deletes it
 drops()[0].handlers.click();
 await tick();
 assert('after drop: open column empty', rows().length, 0);
-assert('after drop: KPIs recompute (8-pt issue gone)', kpi(), 'open=0 pts=8 top=5');
+assert('after drop: KPIs recompute (8-pt issue gone)', kpi(), 'open=0 pts=8 top=5 op=0');
 
 console.log(failures === 0 ? '\nALL OK' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

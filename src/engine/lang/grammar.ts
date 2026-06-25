@@ -68,7 +68,7 @@ export class Grammar {
 
   // ── expressions ──────────────────────────────────────────────────────────
   // Precedence ladder, lowest-binding first:
-  //   ternary < or < and < comparison < add < mul < unary < primary
+  //   ternary < or < and < not < comparison < add < mul < primary
   // Each level folds left while its operator keeps appearing, so `a or b and c`
   // groups as `a or (b and c)` and `a + b * c` as `a + (b * c)`.
   parseExpr(): Expr { return this.ternary(); }
@@ -89,9 +89,17 @@ export class Grammar {
   }
 
   private and(): Expr {
-    let left = this.cmp();
-    while (this.at(Tk.Ident, Kw.And)) { this.next(); left = { kind: Ek.Bin, op: BOp.And, left, right: this.cmp() }; }
+    let left = this.notExpr();
+    while (this.at(Tk.Ident, Kw.And)) { this.next(); left = { kind: Ek.Bin, op: BOp.And, left, right: this.notExpr() }; }
     return left;
+  }
+
+  // `not` binds LOOSER than comparison: `not a contains b` == `not (a contains b)`.
+  // (Was a unary, so `not a contains b` wrongly parsed as `(not a) contains b` -> __has(!a, b).)
+  private notExpr(): Expr {
+    if (!this.at(Tk.Ident, Kw.Not)) return this.cmp();
+    this.next();
+    return { kind: Ek.Un, op: UOp.Not, operand: this.notExpr() };
   }
 
   // Returns the current token as a comparison op, or null (table-driven lookup).
@@ -117,19 +125,13 @@ export class Grammar {
   }
 
   private mul(): Expr {
-    let left = this.unary();
+    let left = this.primary();
     while (this.at(Tk.Punct, Pn.Star) || this.at(Tk.Punct, Pn.Slash)) {
       const op = this.peek().v === Pn.Star ? BOp.Mul : BOp.Div;
       this.next();
-      left = { kind: Ek.Bin, op, left, right: this.unary() };
+      left = { kind: Ek.Bin, op, left, right: this.primary() };
     }
     return left;
-  }
-
-  private unary(): Expr {
-    if (!this.at(Tk.Ident, Kw.Not)) return this.primary();
-    this.next();
-    return { kind: Ek.Un, op: UOp.Not, operand: this.unary() };
   }
 
   // Atoms: parenthesised expr, object literal, literal value, or a (possibly dotted) reference.

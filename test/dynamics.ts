@@ -14,9 +14,14 @@ Page {
   Stack class(panel, active when open) on(mouseenter: toggle) { Text "menu" }
   Button "x" -> toggle
 }`)));
-ok('static class stays in className', js.includes('"stack panel"'));
+ok('static class stays in className', js.includes('"mu-stack panel"'));
 ok('reactive class → classList.toggle effect', js.includes('.classList.toggle("active", !!(open.get()))'));
 ok('on(event: action) → addEventListener', js.includes('.addEventListener("mouseenter", () => toggle())'));
+
+// two separate class() modifiers MERGE (regression: a second class() used to overwrite, silently dropping the first)
+const mergeJs = compileModule(toDoc(parse('screen s\nstate { d = false : bool }\nPage class("chat-app") class(dark when d) { Text "x" }')));
+ok('multiple class() merge: static kept', mergeJs.includes('chat-app'));
+ok('multiple class() merge: reactive kept', mergeJs.includes('.classList.toggle("dark", !!(d.get()))'));
 
 // a conditional class inside `each` resolves against the item local
 const eachJs = compileModule(toDoc(parse(`screen s
@@ -40,6 +45,14 @@ state { open = false : bool }
 action t mutates open <- x { open.set(not open) }
 Page { Link "Home" -> "/about"  Button "x" -> t }`)));
 ok('static link → plain href', staticJs.includes('.href = "/about"'));
+
+// synthetic on(enter: action) on an input → a keydown listener firing only on Enter (no Custom for "Enter to send")
+const enterJs = compileModule(toDoc(parse(`screen s
+state { d = "" : text }
+action go mutates d { d.reset() }
+Page { SearchField bind(d) on(enter: go) "x" }`)));
+ok('on(enter:) → keydown + Enter check', enterJs.includes("if (e.key === 'Enter') go()"));
+ok('SearchField wires on()', enterJs.includes(".addEventListener('keydown'"));
 
 console.log(f ? `\n${f} FAILURE(S)` : '\nALL OK');
 process.exit(f ? 1 : 0);

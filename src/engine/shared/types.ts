@@ -116,8 +116,10 @@ export interface RefetchStmt { op: StOp.Refetch; target: string; params: { [k: s
 /** Explicit non-REST request (escape hatch): `post "shop:/orders" body item`, `delete "shop:/x/{id}"`. */
 export interface RequestStmt { op: StOp.Request; method: string; url: string | Interp; body: Expr | null; }
 export interface CallStmt { op: StOp.Call; target: string; method: string; args: Expr[]; } // page action calling a store action, e.g. `shop.addProduct(draft)`
+/** Calling a `use`'d function as a side-effect statement: `persist(messages)`, `scrollBottom()`. Bounded: the fn is declared + checked. */
+export interface ExternStmt { op: StOp.Extern; fn: string; args: Expr[]; }
 export interface IfStmt { op: StOp.If; cond: Expr; then: Stmt[]; else: Stmt[] | null; }
-export type Stmt = (PushStmt | SetStmt | ResetStmt | ToggleStmt | RemoveStmt | PatchStmt | CreateStmt | UpdateStmt | DeleteStmt | RefetchStmt | RequestStmt | CallStmt | IfStmt) & { loc?: Loc };
+export type Stmt = (PushStmt | SetStmt | ResetStmt | ToggleStmt | RemoveStmt | PatchStmt | CreateStmt | UpdateStmt | DeleteStmt | RefetchStmt | RequestStmt | CallStmt | ExternStmt | IfStmt) & { loc?: Loc };
 
 
 // ── 6. Entities & validation schema ──────────────────────────────────────────
@@ -205,6 +207,22 @@ export interface Theme {
   weight: ThemeScale;
   leading: ThemeScale;
   breakpoints: ThemeScale;
+}
+/** The theme.muten file as parsed: section name (space/colors/radius/…) → its scale. Open set:
+ *  parseTheme reads any `<section> { <step> "value" }`, so colors/radius come for free. */
+export type ThemeRaw = { [section: string]: ThemeScale };
+
+/** A theme ADAPTER: pure DATA describing how to render theme.muten's values for ANY styling backend.
+ *  The engine has zero per-library logic — a new library is just a new adapter (no engine change). */
+export interface ThemeBlock {
+  open: string;                       // block opener, e.g. `@plugin "daisyui/theme" {` | `@theme {` | `:root {`
+  close: string;                      // usually `}`
+  attrs?: { [key: string]: string };  // literal lines inside (e.g. name/default); value `$scheme` -> theme.scheme.mode
+  sections: string[];                 // which theme.muten sections render in this block
+}
+export interface ThemeAdapter {
+  prefix: { [section: string]: string };  // section -> CSS var prefix (colors -> `--color-`); fallback `--<section>-`
+  blocks: ThemeBlock[];
 }
 /** A token family resolver: (modifier, theme) → CSS declarations, or null if unresolved. */
 export type FamilyFn = (m: string, t: Theme) => string | null;
@@ -416,12 +434,19 @@ export interface EmitParts {
 export type FileKind = 'page' | 'store' | 'app' | 'part' | 'theme';
 
 /** validate()'s project-aware context. */
+/** One invalid token found in a `class()`, with the closest valid class (null if none is near). */
+export interface ClassIssue { cls: string; suggestion: string | null; }
+/** Validates class() names. Provided by a styling PLUGIN (a library knows how to check its own classes);
+ *  the engine ships none. `available` is false when no plugin is connected -> class() is left unchecked. */
+export interface ClassValidator { available: boolean; check(classString: string): ClassIssue[]; }
+
 export interface ValidateCtx {
   parts?: string[];
   stores?: string[];
   storeMembers?: { [domain: string]: string[] };  // each store's members (state + gets + actions) -> catch typos like `cart.kount`
   theme?: Theme;
   kind?: FileKind;
+  classValidator?: ClassValidator;                // when set, class() names are validated against the framework's theme
 }
 
 /** A lexical scope while compiling expressions: lambda locals + the action input. */
@@ -484,7 +509,12 @@ export interface RouteDef { load(): Promise<PageModule>; guard?: () => boolean; 
 // ── 14. Build / plugin shapes ────────────────────────────────────────────────
 
 /** Options for the Vite plugin: store auto-detection on/off + an optional inline theme. */
-export interface MutenOptions { store?: boolean; theme?: { [scale: string]: ThemeScale }; }
+/** A muten STYLING PLUGIN, connected via `muten({ styling })` — the seam for library-specific behavior.
+ *  The engine ships NONE and expects no library; a plugin provides how to emit the theme (a ThemeAdapter,
+ *  data) and optionally how to validate class() (e.g. via that library's own tooling). */
+export type ClassValidatorLoader = (cssPath: string, base: string, themeRaw: ThemeRaw) => Promise<ClassValidator>;
+export interface StylingPlugin { theme?: ThemeAdapter; validate?: ClassValidatorLoader; }
+export interface MutenOptions { store?: boolean; theme?: { [scale: string]: ThemeScale }; styling?: StylingPlugin; }
 
 /** The app graph the build emits to app.map.json: the root the AI reads for context. */
 export interface AppMap {

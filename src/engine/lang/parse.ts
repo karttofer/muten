@@ -45,15 +45,16 @@ export class Parser extends Grammar {
       [Mod.Submit, (props: NodeProps) => { const paren = this.at(Tk.Punct, Pn.ParenL); if (paren) this.next(); props.submit = this.parseDotted(); if (paren) this.eat(Tk.Punct, Pn.ParenR); }],
       [Mod.Where, (props: NodeProps) => { props.where = this.parseParenList(() => this.rebuildClause()); }],
       [Mod.Columns, (props: NodeProps) => { props.columns = this.parseParenList(() => this.eat(Tk.Ident).v); }],
-      [Mod.Style, (props: NodeProps) => { props.style = this.parseParenList(() => this.parseStyleToken()); }],
-      [Mod.Class, (props: NodeProps) => { props.class = this.parseParenList(() => { // raw look classes + `name when cond`
+      // repeatable modifiers MERGE (a second `style()`/`class()` appends, never overwrites the first)
+      [Mod.Style, (props: NodeProps) => { props.style = [...(props.style || []), ...this.parseParenList(() => this.parseStyleToken())]; }],
+      [Mod.Class, (props: NodeProps) => { props.class = [...(props.class || []), ...this.parseParenList(() => { // raw look classes + `name when cond`
         const name = this.at(Tk.String) ? this.next().v : this.eat(Tk.Ident).v;
         if (this.at(Tk.Ident, Kw.When)) { this.next(); return { name, cond: this.parseExpr() }; }
         return name;
-      }); }],
+      })]; }],
       [Mod.Alt, (props: NodeProps) => { const paren = this.at(Tk.Punct, Pn.ParenL); if (paren) this.next(); props.alt = this.parseInterpolation(this.eat(Tk.String).v); if (paren) this.eat(Tk.Punct, Pn.ParenR); }],  // Image a11y/SEO alt text
-      [Mod.Inputs, (props: NodeProps) => { props.inputs = this.parseArgs(); }],   // Custom inputs(k: value, ...)
-      [Mod.On, (props: NodeProps) => { props.on = this.parseArgs(); }],           // Custom on(event: action, ...)
+      [Mod.Inputs, (props: NodeProps) => { props.inputs = { ...props.inputs, ...this.parseArgs() }; }],   // Custom inputs(k: value, ...)
+      [Mod.On, (props: NodeProps) => { props.on = { ...props.on, ...this.parseArgs() }; }],               // Custom on(event: action, ...)
     ]);
 
     this.statements = new Map([
@@ -252,6 +253,13 @@ export class Parser extends Grammar {
     if (this.at(Tk.Ident, Kw.If)) return this.parseIf();
     if (this.at(Tk.Ident, 'post') || this.at(Tk.Ident, 'put') || this.at(Tk.Ident, 'delete')) return this.parseRequest();
     const target = this.eat(Tk.Ident).v;
+    if (this.at(Tk.Punct, Pn.ParenL)) { // `fn(args)`: call a use'd function as a side-effect statement (validate checks fn is declared)
+      this.next();
+      const args: Expr[] = [];
+      while (!this.at(Tk.Punct, Pn.ParenR)) { args.push(this.parseExpr()); if (this.at(Tk.Punct, Pn.Comma)) this.next(); }
+      this.eat(Tk.Punct, Pn.ParenR);
+      return { op: StOp.Extern, fn: target, args };
+    }
     this.eat(Tk.Punct, Pn.Dot);
     const method = this.eat(Tk.Ident).v;
     // Lambda-free predicate mutation (the ONLY form): `tasks.remove where id == x` / `tasks.patch where id == x with { ... }`
@@ -356,7 +364,9 @@ export class Parser extends Grammar {
       const scale = this.eat(Tk.Ident).v;            // e.g. space, font, weight, leading, breakpoints
       this.eat(Tk.Punct, Pn.BraceL);
       const steps: ThemeScale = {};
-      while (!this.at(Tk.Punct, Pn.BraceR)) steps[this.eat(Tk.Ident).v] = this.eat(Tk.String).v; // step -> "value"
+      // step -> "value". A hyphenated key (DaisyUI's "base-100", "primary-content") is QUOTED, like a
+      // hyphenated class name; a plain key (primary, md) stays bare.
+      while (!this.at(Tk.Punct, Pn.BraceR)) steps[this.at(Tk.String) ? this.next().v : this.eat(Tk.Ident).v] = this.eat(Tk.String).v;
       this.eat(Tk.Punct, Pn.BraceR);
       theme[scale] = steps;
     }

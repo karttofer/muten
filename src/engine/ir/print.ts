@@ -69,6 +69,7 @@ function printStmt(s: Stmt, ind: string): string {
     case StOp.Refetch: return `${s.target}.refetch(${Object.entries(s.params).map(([k, e]) => `${k}: ${printExpr(e)}`).join(', ')})`;
     case StOp.Request: return `${s.method.toLowerCase()} ${typeof s.url === 'string' ? JSON.stringify(s.url) : printInterp(s.url)}${s.body ? ` body ${printExpr(s.body)}` : ''}`;
     case StOp.Call: return `${s.target}.${s.method}(${s.args.map(printExpr).join(', ')})`;
+    case StOp.Extern: return `${s.fn}(${s.args.map(printExpr).join(', ')})`;
     case StOp.If: {
       const then = s.then.map((st) => ind + IND + printStmt(st, ind + IND)).join('\n');
       const elsePart = s.else ? ` else {\n${s.else.map((st) => ind + IND + printStmt(st, ind + IND)).join('\n')}\n${ind}}` : '';

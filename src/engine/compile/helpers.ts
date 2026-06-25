@@ -10,7 +10,8 @@ export const customValue = (v: ArgValue): string =>
     : JSON.stringify(typeof v === 'object' && '$lit' in v ? v.$lit : v);
 
 // Semantic containers: primitive -> [HTML tag, base class]. One generic codegen path covers all
-// regions (landmarks), so compile.ts doesn't need a case per region type.
+// regions (landmarks), so compile.ts doesn't need a case per region type. The base class is bare here;
+// classFor() prepends `mu-` to EVERY primitive's base, so muten never collides with a framework class.
 export const CONTAINERS: { [type: string]: [string, string] } = {
   [Nt.Shell]: ['div', 'shell'], [Nt.Header]: ['header', 'header'], [Nt.Nav]: ['nav', 'nav'],
   [Nt.Sidebar]: ['aside', 'sidebar'], [Nt.Footer]: ['footer', 'footer'],

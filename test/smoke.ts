@@ -78,7 +78,7 @@ await new Promise((r) => setTimeout(r, 600));
 // ── assertions ──
 let failures = 0;
 const tbody = registry.find((el) => el.tag === 'tbody');
-const search = registry.find((el) => el.className === 'search');
+const search = registry.find((el) => el.className === 'mu-search');
 const form = registry.find((el) => el.handlers.submit);
 const rows = () => tbody.children.filter((c) => c.tag === 'tr').length; // keyed rows are <tr> nodes between the anchor comments
 const tick = () => new Promise((r) => setTimeout(r, 0)); // render effects are BATCHED (microtask) → let them flush before asserting

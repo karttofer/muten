@@ -3,7 +3,7 @@
 // breakpoint pixels come from the project's theme.muten; reset/base lives in the project's
 // stylesheet. Consumed by resolveToken, validate, and the linter.
 
-import type { Theme, ThemeScale, FamilyFn } from '#engine/shared/types.js';
+import type { Theme, ThemeScale, ThemeRaw, ThemeAdapter, FamilyFn } from '#engine/shared/types.js';
 
 // Fixed keyword -> CSS maps: token semantics, not theme-configurable values. Map (not Record)
 // for clean .get()/.has() without index-signature holes.
@@ -65,6 +65,37 @@ export function mergeTheme(theme: { [scale: string]: ThemeScale } = {}): Theme {
     leading:     { ...(theme.leading || {}) },
     breakpoints: { ...(theme.breakpoints || {}) },
   };
+}
+
+// ── theme.muten -> CSS, AGNOSTICALLY. The core knows NO styling library ──────────────────────────
+// theme.muten holds the VALUES (agnostic). By default the engine emits them as plain CSS custom
+// properties on :root — universal, any CSS setup consumes them; the engine has zero per-library code.
+// A muten styling PLUGIN may pass an `adapter` (pure data) to render a library's own format (e.g.
+// DaisyUI's `@plugin`); the engine ships none and never expects a specific library.
+const GENERIC_PREFIX: { [section: string]: string } = {
+  colors: '--color-', space: '--space-', radius: '--radius-', font: '--font-',
+  weight: '--weight-', leading: '--leading-', breakpoints: '--breakpoint-', size: '--size-',
+};
+const META_SECTIONS = new Set(['scheme', 'target']); // config, not CSS vars
+
+export function emitTheme(theme: ThemeRaw = {}, adapter?: ThemeAdapter): string {
+  if (adapter) { // a plugin's library-specific format: walk its blocks, map values × prefix (still no library name here)
+    const out: string[] = [];
+    for (const block of adapter.blocks) {
+      const lines: string[] = [];
+      for (const [k, v] of Object.entries(block.attrs || {})) lines.push(`  ${k}: ${v === '$scheme' ? (theme.scheme?.mode ?? 'light') : v};`);
+      for (const section of block.sections) {
+        const prefix = adapter.prefix[section] ?? `--${section}-`;
+        for (const [key, val] of Object.entries(theme[section] || {})) lines.push(`  ${prefix}${key}: ${val};`);
+      }
+      if (lines.length) out.push(`${block.open}\n${lines.join('\n')}\n${block.close}`);
+    }
+    return out.length ? out.join('\n\n') + '\n' : '';
+  }
+  // default: plain CSS custom properties, library-neutral.
+  const lines = Object.entries(theme).filter(([s]) => !META_SECTIONS.has(s))
+    .flatMap(([s, scale]) => Object.entries(scale).map(([k, v]) => `  ${GENERIC_PREFIX[s] ?? `--${s}-`}${k}: ${v};`));
+  return lines.length ? `:root {\n${lines.join('\n')}\n}\n` : '';
 }
 
 // Token -> CSS declarations using the project's theme, or null if the token is invalid/unresolved.

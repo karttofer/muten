@@ -12,9 +12,9 @@ import { toDoc } from '#engine/ir/flatten.js';
 import { load, loadAllParts, findStores } from '#engine/project/load.js';
 import { validate } from '#engine/ir/validate.js';
 import { compileModule, compileStore } from '#engine/compile/compile.js';
-import { mergeTheme } from '#engine/style/tokens.js';
+import { mergeTheme, emitTheme } from '#engine/style/tokens.js';
 import { Nt } from '#engine/shared/vocab.js';
-import type { IR, Theme, MutenOptions, StoreSlice, PartDef } from '#engine/shared/types.js';
+import type { IR, Theme, ThemeRaw, ClassValidator, MutenOptions, StoreSlice, PartDef } from '#engine/shared/types.js';
 
 // virtual module IDs this plugin owns (leading \0 prevents Vite from resolving them to disk).
 const RID = 'virtual:muten/runtime';
@@ -26,7 +26,9 @@ const RUNTIME = readFileSync(join(here, 'runtime.js'), 'utf8'); // browser runti
 
 export default function muten(options: MutenOptions = {}): Plugin {
   const storeEnabled = options.store !== false;
-  let theme: Theme = mergeTheme(options.theme);  // overridden by theme.muten if present
+  let theme: Theme = mergeTheme(options.theme);  // merged scale for style() tokens; overridden by theme.muten
+  let themeRaw: ThemeRaw = options.theme || {};  // FULL theme.muten (incl. colors/radius) for the native theme emit
+  let classValidator: ClassValidator | undefined; // class() checker backed by the framework's design system
   let appRoot = process.cwd();
   let parts: { [name: string]: PartDef } = {};
   let slices: { [domain: string]: IR } = {};
@@ -79,11 +81,17 @@ if (root) {
     const rootFile = join(appRoot, 'src', 'app.muten');
     appIr = existsSync(rootFile) ? parse(readFileSync(rootFile, 'utf8')) : undefined;
     const themeFile = join(appRoot, 'theme.muten');
-    theme = existsSync(themeFile) ? mergeTheme(parse(readFileSync(themeFile, 'utf8')).theme || {}) : mergeTheme(options.theme);
+    themeRaw = existsSync(themeFile) ? (parse(readFileSync(themeFile, 'utf8')).theme || {}) : (options.theme || {});
+    theme = mergeTheme(themeRaw);
     stylesHref = null;
+    let stylesPath: string | null = null;
     for (const name of ['styles.css', 'styles.scss']) {
-      if (existsSync(join(appRoot, 'src', name))) { stylesHref = '/src/' + name; break; }
+      const p = join(appRoot, 'src', name);
+      if (existsSync(p)) { stylesHref = '/src/' + name; stylesPath = p; break; }
     }
+    // class() validation is a styling-plugin concern (library-specific), never baked into the core.
+    // If a plugin is connected via `muten({ styling: { validate } })`, use it; else class() is unchecked.
+    classValidator = (stylesPath && options.styling?.validate) ? await options.styling.validate(stylesPath, appRoot, themeRaw) : undefined;
   };
 
   // Debounced HMR handler. Pages inline parts/data/theme; shell and stores are virtual modules.
@@ -96,8 +104,8 @@ if (root) {
       loadProject().then(() => {
         for (const mod of server.moduleGraph.idToModuleMap.values()) {
           const id = mod.id || '';
-          if (id.endsWith('.muten') || id.includes('virtual:muten/shell') || id.includes('virtual:muten/store/')) {
-            server.moduleGraph.invalidateModule(mod);
+          if (id.endsWith('.muten') || id.endsWith('/styles.css') || id.endsWith('/styles.scss') || id.includes('virtual:muten/shell') || id.includes('virtual:muten/store/')) {
+            server.moduleGraph.invalidateModule(mod); // styles too: a theme.muten edit must re-inject the native theme block
           }
         }
         server.ws.send({ type: 'full-reload' });
@@ -122,7 +130,12 @@ if (root) {
 
       if (id.startsWith('\0' + STORE_PREFIX)) { // one store domain -> compiled ESM slice
         const ir = slices[id.slice(('\0' + STORE_PREFIX).length)];
-        if (ir) return compileStore({ state: ir.state || {}, gets: ir.gets || {}, actions: ir.actions || {}, effects: ir.effects || [], entities: ir.entities || {}, imports: ir.imports || [] }, ir.mock || {}, ir.sources || {});
+        if (ir) {
+          // A store compiles to a VIRTUAL module, so a relative `use … from "./x"` has no disk anchor.
+          // Rewrite it to a root-absolute path (the store lives at <root>/src/<domain>.store).
+          const imports = (ir.imports || []).map((im) => im.from.startsWith('.') ? { ...im, from: '/' + join('src', im.from).replace(/\\/g, '/') } : im);
+          return compileStore({ state: ir.state || {}, gets: ir.gets || {}, actions: ir.actions || {}, effects: ir.effects || [], entities: ir.entities || {}, imports }, ir.mock || {}, ir.sources || {});
+        }
       }
 
       if (id === '\0' + SHELL) { // persistent chrome (navbar + slot); falls back to a bare outlet if no shell defined
@@ -135,7 +148,15 @@ if (root) {
 
     },
 
-    async transform(_code: string, id: string) {
+    async transform(code: string, id: string) {
+      // theme.muten -> the TARGET library's NATIVE theme block, appended to the project stylesheet.
+      // `enforce: 'pre'` runs before @tailwindcss/vite. The adapter (which library + how to emit) comes
+      // from theme.muten's `target` resolved against presets / `muten({ adapters })` — engine knows no library.
+      const sheet = id.replace(/\\/g, '/').split('?')[0];
+      if (sheet.endsWith('/styles.css') || sheet.endsWith('/styles.scss')) {
+        const block = emitTheme(themeRaw, options.styling?.theme);
+        return block ? { code: code + '\n\n/* muten: generated from theme.muten */\n' + block, map: null } : null;
+      }
       if (!id.endsWith('.muten')) return null;
       if (id.replace(/\\/g, '/').endsWith('/src/app.muten')) return { code: buildBoot(), map: null }; // app root is the boot entry
       const loaded = await load(id, parts); // engine load() with parts gathered up front, not the Vite hook above
@@ -143,7 +164,7 @@ if (root) {
       // page-to-store action composition. Without it, both are wrongly rejected.
       const storeMembers: { [d: string]: string[] } = {};
       for (const [d, m] of Object.entries(storesMeta)) storeMembers[d] = [...(m.state || []), ...(m.gets || []), ...(m.actions || [])];
-      const { ok, diagnostics } = validate(loaded.doc, { parts: loaded.partNames, stores: Object.keys(storesMeta), storeMembers, theme });
+      const { ok, diagnostics } = validate(loaded.doc, { parts: loaded.partNames, stores: Object.keys(storesMeta), storeMembers, theme, classValidator });
       if (!ok) throw new Error('muten: ' + diagnostics.map((d) => d.message).join(' · '));
 
       const customNames = [...new Set(Object.values(loaded.doc.nodes).filter((n) => n.type === Nt.Custom).map((n) => n.props?.component))];

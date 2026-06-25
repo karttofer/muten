@@ -95,14 +95,14 @@ that needs the full React ecosystem, and it doesn't pretend to be.
 
 | Area | What you get |
 |---|---|
-| **UI** | declarative primitives (layout, text, forms, tables, links) · `when`/`each` control flow · `style()` layout tokens + `class()` look (reactive: `class(active when isOpen)`) · `on(event: action)` on any element |
+| **UI** | declarative primitives (layout, text, forms, tables, links) · `when`/`each` control flow · `style()` layout tokens + `class()` look (reactive: `class(active when isOpen)`) · `on(event: action)` on any element · **`on(enter: action)`** synthetic event on inputs (fires only on Enter key - no Custom needed for Enter-to-submit): `SearchField bind(draft) on(enter: send)` |
 | **State** | local `state` · app-global `store` · derived `get` · `action`s with `if/else` · fine-grained signals. A page action can **call a store action** (`cart.add(d)  draft.reset()`): store + local work in one handler |
 | **Lists** | bounded ops, no raw `map`/`reduce`: inline objects (`push({…})`) · in-place `patch` · filtered `each…where` · aggregates `sum`/`count`/`avg`/`min`/`max` · `sort`/`sortDesc` |
 | **Forms** | a `Form` auto-built from an entity, one input per field: `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select), with built-in validation |
 | **Data** | `query` states over `sources` (full HTTP: method, headers, body, nested `at`) · one `api` block (named multi-backend clients) · optimistic CRUD (`create`/`update`/`delete` + `.pending`/`.error`) · `refetch(q: …, page: …)` · **`query x live`** (WebSocket real-time: the server pushes, only changed rows re-render) · a `post`/`put`/`delete` escape for non-REST |
-| **Routing** | real-path URLs · params (`/product/:id` → `param id`) · route guards · a `/404` catch-all |
+| **Routing** | real-path URLs · params (`/product/:id` -> `param id`) · route guards · `/404` catch-all · route paths are **quoted strings**: `routes { "/" -> home  "/404" -> notfound }` · `Link "label" -> "/path"` · guard redirects `else "/login"` (bare paths no longer parse) |
 | **SEO / SSR** | `muten build` pre-renders every route to real HTML (static pages ship zero JS; data pages fetched at build) · per-page `meta { title … description … }` with `og:*` auto-derived |
-| **Interop** (lowest tier first) | `class()` for native HTML + CSS libs · `Custom` for vanilla-JS libs (charts, maps, pickers) · `use fmt from "./lib.ts"` for JS logic |
+| **Interop** (lowest tier first) | `class()` for native HTML + CSS libs · `Custom` for vanilla-JS libs (charts, maps, pickers) · `use fmt from "./lib.ts"` for JS logic · **`use` functions callable as statements** inside `action` or `effect` (side effects: persist, scroll, analytics): `action send { messages.push(m)  persist(messages)  scrollBottom() }` |
 | **AI-native** | `lint == build` · one source of truth per concept · the full language reference ships in every scaffolded app under `.claude/` (an AGENTS guide + a Claude skill) |
 
 ## Reactivity & reconciliation
@@ -132,15 +132,17 @@ Almost every "hard widget" lands at **tier 2**. The language stays small by desi
 crossing into a `Custom`, and the call site of a `use` function (an undeclared one is a `check` error). So
 coupling in chart.js or zod never costs you the oracle on the muten side.
 
-**Deploy - the honest caveat.** A `use` function ships real JS that the static `muten build` does
-**not** bundle:
-
-| Your app uses… | Deploy with |
-|---|---|
-| Pure muten, static content | `muten build` (zero-JS HTML) - or `vite build` |
-| `use` JS functions or shared cross-page state | **`vite build`** (it bundles them; the static build doesn't) |
-
+**Deploy - the honest caveat.** `muten build` (the CLI SSG) is **structure-only**: it emits plain HTML
+per route but omits non-layout token CSS, the project `styles.css`, and does not bundle `use` functions
+(they throw at runtime if the static build is served). For a styled, fully-runnable app use `vite build`.
 `npm run dev` runs every tier regardless - this only affects the production *build*.
+
+| Your app uses... | Deploy with |
+|---|---|
+| Pure muten, static content only | `muten build` (zero-JS HTML) or `vite build` |
+| `use` JS functions, `Custom`, shared store, or any styling | **`vite build`** (bundles everything; the static build doesn't) |
+
+**Most real apps use `vite build`.**
 
 ## The app, by convention
 
@@ -161,6 +163,7 @@ my-app/
 ```
 routes {
   "/" -> home
+  "/404" -> notfound
 }
 ```
 
@@ -242,8 +245,8 @@ production system on it yet (small ecosystem, one maintainer, not yet battle-tes
 
 **Solid today:** the language + compiler, the `check` / `build` / `map` CLI + oracle, the Vite plugin + dev
 server + HMR, the VS Code extension (live-lint + autocomplete).
-The bounded list toolkit - inline objects, `patch`, `each…where`, aggregates (`sum`/`count`/`avg`/`min`/`max`),
-`sort`/`sortDesc`, and page→store action composition, so a real CRUD/dashboard app is pure muten, no JS escape.
+The bounded list toolkit - inline objects, `patch`, `each...where`, aggregates (`sum`/`count`/`avg`/`min`/`max`),
+`sort`/`sortDesc`, and page->store action composition, so a real CRUD/dashboard app is pure muten, no JS escape.
 `Form` fields cover `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select), with validation.
 Reactivity is keyed and batched: `each`/`DataTable` reconcile rows by `id` with minimal DOM moves, and `query x live`
 streams real-time updates over a WebSocket (only changed rows re-render).
@@ -255,6 +258,36 @@ streams real-time updates over a WebSocket (only changed rows re-render).
   static `muten build`).
 
 **By design (the moat, not a bug):** muten is declarative + bounded. The list toolkit (`patch` · `sort` · the
-aggregates · `each…where`) gives the *common* list jobs without exposing raw `map`/`reduce` - anything past that
+aggregates · `each...where`) gives the *common* list jobs without exposing raw `map`/`reduce` - anything past that
 (an arbitrary transform) is a `use` JS function, and a real framework widget is a tier 2/3 escape. The ceiling is
 what keeps it small and analyzable; closing it would just make another general-purpose framework.
+
+## Limitations / not yet
+
+These are honest gaps found during stress-testing. They are known and tracked; none are design mistakes, just things not built yet.
+
+**Build tooling**
+- `muten build` (CLI SSG) is structure-only: it omits non-layout token CSS, the project `styles.css`, and does not bundle `use` functions (they throw). Use `npm run dev` for development and `vite build` for production in any real app.
+
+**Language features not yet available**
+- No `match`/`switch`: use N separate `when` blocks per enum value.
+- `sort by` takes a literal field name, not a variable.
+- `query x live` (WebSocket) requires the server to send an `id` per row for keyed diffing; without it, reconciliation falls back to full re-render.
+
+**DataTable**
+- Renders raw cell values only; no per-column formatting yet. For formatted cells, use `each` with a `Part`.
+
+**Form**
+- Auto-generates one input per entity field; no conditional fields.
+- Enum fields cannot be marked `required`.
+- Field types are limited to `text`, `number`, `email`, `bool`, `enum`. No `password`, `date`, or `textarea` yet - drop to a `Custom` component for those.
+- `Form` renders all entity fields; there is no way to exclude a subset without a `Custom`.
+
+**Select / dropdown outside a Form**
+- No standalone `Select` primitive. A `Form` auto-generates one for enum fields; outside a `Form`, build a button group with `each` + `on(click:)`.
+
+**Custom inputs**
+- A `Custom` component receives a snapshot of state at mount. To keep it reactive, pass state references with `@` props and manage updates inside the component.
+
+**No design-system escape hatch yet**
+- `class()` passes through arbitrary CSS class names, but there is no component-level slot system for composing muten primitives inside a `Custom`.

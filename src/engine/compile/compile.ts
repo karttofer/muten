@@ -45,7 +45,9 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
     for (const token of props.style || []) usedTokens.add(token);
     // style() = analyzable Muten tokens; class() = raw CSS/Tailwind passed straight through.
     // conditional class (`name when cond`) is omitted here and toggled reactively by genDynamics.
-    return [base, ...(props.style || []).map(tokenClass), ...(props.class || []).filter((c): c is string => typeof c === 'string')].join(' ');
+    // Every primitive's base class is `mu-`-prefixed so muten NEVER collides with a CSS framework or
+    // your own classes (DaisyUI ships .stack/.footer/.link/.card…); your look goes through class().
+    return ['mu-' + base, ...(props.style || []).map(tokenClass), ...(props.class || []).filter((c): c is string => typeof c === 'string')].join(' ');
   };
 
   // Shared compile context + the behaviour compiler that reads it (see logic.ts). `usedStores`
@@ -65,7 +67,11 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   // reactive element bits: conditional classes (`class(active when cond)`) + events (`on(keydown: fn)`).
   const genDynamics = (id: string, p: NodeProps): void => {
     for (const c of p.class || []) if (typeof c !== 'string') lines.push(`effect(() => el_${id}.classList.toggle(${JSON.stringify(c.name)}, !!(${logic.compileExpr(c.cond, pageScope)})));`);
-    for (const [event, act] of Object.entries(p.on || {})) if (typeof act === 'string') lines.push(`el_${id}.addEventListener(${JSON.stringify(event)}, () => ${logic.actionRef(act)}());`);
+    for (const [event, act] of Object.entries(p.on || {})) {
+      if (typeof act !== 'string') continue;
+      if (event === 'enter') lines.push(`el_${id}.addEventListener('keydown', (e) => { if (e.key === 'Enter') ${logic.actionRef(act)}(); });`); // synthetic: Enter key only
+      else lines.push(`el_${id}.addEventListener(${JSON.stringify(event)}, () => ${logic.actionRef(act)}());`);
+    }
   };
 
   const genChildren = (id: string, parentVar: string): void => {
@@ -127,6 +133,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         if (typeof p.placeholder === 'string') lines.push(`el_${id}.placeholder = ${JSON.stringify(p.placeholder)};`);
         lines.push(`effect(() => { if (el_${id}.value !== ${sig}.get()) el_${id}.value = ${sig}.get(); });`); // two-way: state->input so `.reset()` clears the box; guarded to avoid yanking the caret
         lines.push(`el_${id}.addEventListener('input', (e) => ${sig}.set(e.target.value));`);
+        genDynamics(id, p); // wire on(enter: send) / on(...) + conditional class on the input
         lines.push(`${parentVar}.appendChild(el_${id});`);
         break;
       }
@@ -199,7 +206,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
 
         lines.push(`const el_${id} = document.createElement('form');`);
         lines.push(`el_${id}.className = ${JSON.stringify(classFor('form', p))};`);
-        lines.push(`{ const t = document.createElement('div'); t.className = 'form-title'; t.textContent = ${JSON.stringify('New ' + entityName)}; el_${id}.appendChild(t); }`);
+        lines.push(`{ const t = document.createElement('div'); t.className = 'mu-form-title'; t.textContent = ${JSON.stringify('New ' + entityName)}; el_${id}.appendChild(t); }`);
 
         const fieldVars: Array<EditableField & { var: string; c?: FieldConstraint }> = [];
         for (const f of fields) {
@@ -207,18 +214,18 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
           fieldVars.push({ ...f, var: fv, c: fc[f.name] });
           if (f.kind === Fk.Enum) {
             lines.push(`const ${fv} = document.createElement('select');`);
-            lines.push(`${fv}.className = 'field';`);
+            lines.push(`${fv}.className = 'mu-field';`);
             for (const opt of f.options) {
               lines.push(`{ const o = document.createElement('option'); o.value = ${JSON.stringify(opt)}; o.textContent = ${JSON.stringify(opt)}; ${fv}.appendChild(o); }`);
             }
           } else if (f.kind === Fk.Bool) {
             lines.push(`const ${fv} = document.createElement('input');`);
             lines.push(`${fv}.type = 'checkbox';`);
-            lines.push(`${fv}.className = 'field-check';`);
+            lines.push(`${fv}.className = 'mu-field-check';`);
           } else {
             lines.push(`const ${fv} = document.createElement('input');`);
             lines.push(`${fv}.type = ${JSON.stringify(f.kind === Fk.Email ? 'email' : f.kind === Fk.Number ? 'number' : 'text')};`);
-            lines.push(`${fv}.className = 'field';`);
+            lines.push(`${fv}.className = 'mu-field';`);
             lines.push(`${fv}.placeholder = ${JSON.stringify(f.name)};`);
           }
           // each edit patches the draft's sub-field immutably so the reflect effect re-runs.
@@ -229,10 +236,10 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
             lines.push(`${fv}.addEventListener('input', (e) => ${sig}.set({ ...${sig}.get(), ${JSON.stringify(f.name)}: ${val} }));`);
           }
           lines.push(`el_${id}.appendChild(${fv});`);
-          if (fc[f.name]) lines.push(`const err_${fv} = document.createElement('small'); err_${fv}.className = 'field-error'; el_${id}.appendChild(err_${fv});`);
+          if (fc[f.name]) lines.push(`const err_${fv} = document.createElement('small'); err_${fv}.className = 'mu-field-error'; el_${id}.appendChild(err_${fv});`);
         }
 
-        lines.push(`{ const sb = document.createElement('button'); sb.type = 'submit'; sb.className = 'submit'; sb.textContent = ${JSON.stringify(typeof p.submitLabel === 'string' ? p.submitLabel : 'Submit')}; el_${id}.appendChild(sb); }`);
+        lines.push(`{ const sb = document.createElement('button'); sb.type = 'submit'; sb.className = 'mu-submit'; sb.textContent = ${JSON.stringify(typeof p.submitLabel === 'string' ? p.submitLabel : 'Submit')}; el_${id}.appendChild(sb); }`);
         // submit: validate against schema constraints; only call the action when every field passes.
         const vChecks: string[] = [];
         for (const fv of fieldVars) {

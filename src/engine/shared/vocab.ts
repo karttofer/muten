@@ -83,7 +83,7 @@ export const AGG_OPS = new Set<string>(['sum', 'count', 'avg', 'min', 'max']);
 export const SORT_OPS = new Set<string>(['sort', 'sortDesc']);
 
 /** Action-body statement ops (discriminants): mutations + the `if` branch. */
-export enum StOp { Push = 'push', Set = 'set', Reset = 'reset', Toggle = 'toggle', Remove = 'remove', Patch = 'patch', Create = 'create', Update = 'update', Delete = 'delete', Refetch = 'refetch', Request = 'request', Call = 'call', If = 'if' }
+export enum StOp { Push = 'push', Set = 'set', Reset = 'reset', Toggle = 'toggle', Remove = 'remove', Patch = 'patch', Create = 'create', Update = 'update', Delete = 'delete', Refetch = 'refetch', Request = 'request', Call = 'call', Extern = 'extern', If = 'if' }
 
 /** Node modifiers (post-primitive). */
 export enum Mod {

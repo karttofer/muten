@@ -43,13 +43,30 @@ export class Logic {
     return Object.entries(entity).filter(([, type]) => type === 'uuid').map(([field]) => field);
   }
 
-  // bare-referenceable fields of `<list>`'s element, for a `where` filter's item-implicit scope.
+  // bare-referenceable fields of `<list>`'s element, for a `where`/`by` item-implicit scope.
   // `tasks : list<Task>` -> { id, ...Task fields }; non-entity element (list<uuid>) -> just `id`.
   private itemFields(list: string): Set<string> {
-    const type = this.ctx.state[list.split('.')[0]]?.type || '';
-    const elem = type.startsWith('list<') ? type.slice(5, -1) : '';
-    const entity = this.ctx.entities[elem];
+    const entity = this.ctx.entities[this.listElemType(list.split('.')[0])];
     return new Set(['id', ...(entity ? Object.keys(entity) : [])]);
+  }
+
+  // element-entity name behind a list head: a state's `list<X>`, OR a derived `get` whose body resolves
+  // to a list (a `where`-filter or a sort over another list/get). '' when not a list-of-entity; cycle-guarded.
+  // Without this, an aggregate/filter OVER a get compiled its body's bare fields as undefined globals
+  // (a runtime ReferenceError), the mirror of the same gap in validate.
+  private listElemType(head: string, seen: Set<string> = new Set()): string {
+    const stateType = this.ctx.state[head]?.type || '';
+    if (stateType.startsWith('list<')) return stateType.slice(5, -1);
+    const body = this.ctx.gets[head];
+    if (body !== undefined && !seen.has(head)) { seen.add(head); return this.getBodyElemType(body, seen); }
+    return '';
+  }
+  private getBodyElemType(e: Expr, seen: Set<string>): string {
+    if (!e) return '';
+    if (e.kind === Ek.Ref) return this.listElemType(e.name.split('.')[0], seen);
+    if (e.kind === Ek.Filter) return this.listElemType(e.list.split('.')[0], seen);
+    if (e.kind === Ek.Agg && (e.op === 'sort' || e.op === 'sortDesc')) return this.listElemType(e.list.split('.')[0], seen);
+    return '';
   }
 
   // does the body contain a server write (create/update/delete)? recurses into if-branches.
@@ -236,6 +253,10 @@ export class Logic {
         // page action calling a store action: `shop.addProduct(draft)` -> call the imported store fn.
         this.ctx.usedStores.add(st.target);
         out.push(`__store_${st.target}.${st.method}(${st.args.map((a) => this.compileExpr(a, scope)).join(', ')});`);
+        break;
+      case StOp.Extern:
+        // calling a use'd function as a side-effect: `persist(messages)` -> the imported fn, args compiled like any expr.
+        out.push(`${st.fn}(${st.args.map((a) => this.compileExpr(a, scope)).join(', ')});`);
         break;
     }
     return out;

@@ -18,7 +18,7 @@ entity Item { name text }
 state { items = query items : list<Item> }
 Page { each items as it { Text "{it.name}" } }`, { items: [{ name: 'Apple' }, { name: 'Banana' }] });
 ok('each renders mock rows', list.includes('Apple') && list.includes('Banana'), list);
-ok('rows are real <p> tags', (list.match(/<p class="text">/g) || []).length === 2);
+ok('rows are real <p> tags', (list.match(/<p class="mu-text">/g) || []).length === 2);
 
 // interpolation resolves the state initial at build
 ok('interpolation uses state initial', ssr(`screen c\nstate { name = "World" : text }\nPage { Title "Hi {name}" }`).includes('Hi World'));
@@ -28,7 +28,7 @@ ok('when true renders body', ssr(`screen c\nstate { on = true : bool }\nPage { w
 ok('when false omits body', !ssr(`screen c\nstate { on = false : bool }\nPage { when on { Text "no" } }`).includes('no'));
 
 // containers + style tokens survive as classes
-ok('containers + classes', ssr(`screen c\nPage style(padding.lg) { Title "T" }`).includes('<main class="page t-padding-lg">'));
+ok('containers + classes', ssr(`screen c\nPage style(padding.lg) { Title "T" }`).includes('<main class="mu-page t-padding-lg">'));
 
 // HTML is escaped (no injection from data)
 ok('text is escaped', ssr(`screen c\nstate { x = "<b>hi</b>" : text }\nPage { Text "{x}" }`).includes('&lt;b&gt;'));

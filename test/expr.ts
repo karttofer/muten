@@ -20,6 +20,12 @@ const c = (l, ok, e = '') => { console.log((ok ? '✓' : 'x') + ' ' + l + (ok ? 
   c('inner op is >=', cond.operand.op === '>=', cond.operand?.op);
 }
 
+// `not` binds LOOSER than comparison: `not a contains b` → not(a contains b), NOT (not a) contains b
+{
+  const cond = parse('screen t\nstate { favs = [] : list<text>  x = "" : text }\nPage { when not favs contains x { Text "y" } }').tree.children[0].props.cond;
+  c('not binds looser than contains', cond.kind === 'un' && cond.op === 'not' && cond.operand?.kind === 'bin' && cond.operand?.op === 'contains', JSON.stringify(cond));
+}
+
 // text interpolation: `"Hi, {user.name}!"`
 {
   const v = parse('screen t\nPage { Text "Hi, {user.name}!" }').tree.children[0].props.value;

@@ -39,5 +39,17 @@ ok('declared fn passes', good.diagnostics.every((d) => d.code !== 'unknown-funct
 const rt = parse(print(ir));
 ok('printer round-trips', JSON.stringify(rt.imports) === JSON.stringify(ir.imports));
 
+// use a function as a STATEMENT in an action (a side effect), not just an expression
+const fxIr = parse(`screen s
+use persist, scrollBottom from "./fx.ts"
+state { n = 0 : number }
+action go mutates n { n.set(1)  persist(n)  scrollBottom() }
+Page { Button "go" -> go }`);
+ok('use fn in action: validates clean', validate(toDoc(fxIr)).diagnostics.every((d) => d.code !== 'unknown-function'));
+ok('use fn in action: emits the call', compileModule(toDoc(fxIr)).includes('persist(n.get())'));
+const fxBad = validate(toDoc(parse(`screen s\nstate { n = 0 : number }\naction go mutates n { ghost()  n.set(1) }\nPage { Text "x" }`)));
+ok('use fn in action: undeclared caught', fxBad.diagnostics.some((d) => d.code === 'unknown-function'));
+ok('use fn in action: prints the call', /persist\(n\)/.test(print(fxIr)) && /scrollBottom\(\)/.test(print(fxIr)));
+
 console.log(f ? `\n${f} FAILURE(S)` : '\nALL OK');
 process.exit(f ? 1 : 0);

@@ -180,6 +180,27 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     if (e.kind === Ek.Agg) return (e.op === 'sort' || e.op === 'sortDesc') ? '' : 'number'; // aggregates -> number; sort -> a list (don't infer)
     return ''; // bin/call/obj/tern/un: don't infer
   };
+
+  // The list type behind a derived `get` (or a chain of them), so an aggregate/filter OVER a get
+  // still resolves the element's fields (`get won = opps where … ` then `won.sum by amount`).
+  // '' when not a list or unresolvable; cycle-guarded against a get that references itself.
+  const refListType = (name: string, scope: Map<string, string>, seen: Set<string>): string => {
+    const head = name.split('.')[0];
+    if (scope.has(head)) return scope.get(head) || '';
+    const st = doc.state?.[head]?.type;
+    if (st) return st;                                   // state (a query's `.data` is the same list type)
+    if (doc.gets && head in doc.gets && !seen.has(head)) { seen.add(head); return getBodyListType(doc.gets[head], scope, seen); }
+    return '';
+  };
+  const getBodyListType = (e: Expr, scope: Map<string, string>, seen: Set<string>): string => {
+    if (!e) return '';
+    if (e.kind === Ek.Ref) return refListType(e.name, scope, seen);
+    if (e.kind === Ek.Filter) return refListType(e.list, scope, seen);                                          // a `where`-filter preserves the element type
+    if (e.kind === Ek.Agg && (e.op === 'sort' || e.op === 'sortDesc')) return refListType(e.list, scope, seen); // a sorted copy: same element type
+    return '';
+  };
+  const getListType = (head: string, scope: Map<string, string>): string =>
+    (doc.gets && head in doc.gets) ? getBodyListType(doc.gets[head], scope, new Set([head])) : '';
   // arithmetic `- * /` on a non-number operand produces NaN at runtime. `+` is also string concat, so it's left alone.
   const checkArith = (e: Expr, loc: Loc | null, scope: Map<string, string>): void => {
     if (e.kind === Ek.Bin) {
@@ -193,6 +214,11 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
         const norm = (t: string): string => (t === 'number' || t === 'bool') ? t : (t.startsWith('enum:') || ['text', 'string', 'email', 'uuid'].includes(t)) ? 'text' : t;
         const lt = exprType(e.left, scope), rt = exprType(e.right, scope);
         if (lt && rt && norm(lt) !== norm(rt)) D.push(diag('compare-type', `comparing a ${lt} to a ${rt} — they never match (always ${e.op === BOp.Neq ? 'true' : 'false'}). Likely a quoted number (\`== "1"\` vs \`== 1\`) or a type mismatch.`, { loc }));
+      }
+      if (e.op === BOp.Contains) { // `list<Entity> contains <scalar>` -> array.includes(object) is ALWAYS false
+        const lt = exprType(e.left, scope);
+        const elem = lt.startsWith('list<') ? lt.slice(5, -1) : '';
+        if (elem && doc.entities?.[elem]) D.push(diag('contains-entity', `\`contains\` on a list of "${elem}" objects checks object identity, not a field — it is always false. Use a \`list<scalar>\` (e.g. list<text>), or filter a field with \`each … where field == x\`.`, { loc }));
       }
       checkArith(e.left, loc, scope); checkArith(e.right, loc, scope);
     } else if (e.kind === Ek.Un) checkArith(e.operand, loc, scope);
@@ -209,7 +235,8 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     const aggWalk = (e: Expr): void => {
       if (e.kind === Ek.Agg) {
         const head = e.list.split('.')[0];
-        const lt = scope.has(head) ? (scope.get(head) || '') : (doc.state?.[head]?.type || '');
+        let lt = scope.has(head) ? (scope.get(head) || '') : (doc.state?.[head]?.type || '');
+        if (!lt) lt = getListType(head, scope); // a `get` resolving to a derived list (chained aggregate / filter)
         const elem = lt.startsWith('list<') ? lt.slice(5, -1) : '';
         if (lt && !lt.startsWith('list<') && !storeDomains.has(head)) D.push(diag('agg-not-list', `\`${e.op} …\` needs a list, but "${e.list}" is "${lt}".`, { loc }));
         const bodyScope = new Map(scope);
@@ -223,7 +250,8 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       }
       if (e.kind === Ek.Filter) { // derived list `<list> where <cond>`: list must be a list; cond's bare fields are the element's
         const head = e.list.split('.')[0];
-        const lt = scope.has(head) ? (scope.get(head) || '') : (doc.state?.[head]?.type || '');
+        let lt = scope.has(head) ? (scope.get(head) || '') : (doc.state?.[head]?.type || '');
+        if (!lt) lt = getListType(head, scope); // a `get` resolving to a derived list (chained aggregate / filter)
         const elem = lt.startsWith('list<') ? lt.slice(5, -1) : '';
         if (lt && !lt.startsWith('list<') && !storeDomains.has(head)) D.push(diag('filter-not-list', `\`${e.list} where …\` needs a list, but "${e.list}" is "${lt}".`, { loc }));
         // bind each element field as a bare in-scope name so the cond's `status == "todo"` field- and type-checks
@@ -396,7 +424,8 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     for (const c of n.children || []) walk(c, childScope, n.type === 'DataTable');
   };
   if (doc.rootId) walk(doc.rootId, new Map());
-  else if (ctx.kind !== 'store') D.push(diag('no-root', 'the doc is missing a rootId'));
+  // a page (has `screen`) needs one root node; a parts/app/empty file has no screen and no page root.
+  else if (ctx.kind !== 'store' && doc.screen) D.push(diag('no-root', `page "${doc.screen}" has no root node: a page needs one top-level node, e.g. Page { ... }`));
 
   // `get` is a derived value (computed signal), valid on a page and in a .store alike.
   // `effect` is store-only: a page reacts through `when`/`each`, not side-effects.
@@ -416,6 +445,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       else if (st.op === StOp.Patch) { const inner = itemPredScope(new Map(), st.target); checkExpr(st.pred, null, inner); checkExpr(st.patch, null, inner); }
       else if (st.op === StOp.Refetch) { for (const v of Object.values(st.params)) checkExpr(v, null, new Map()); }
       else if (st.op === StOp.Request) { if (st.body) checkExpr(st.body, null, new Map()); }
+      else if (st.op === StOp.Extern) { if (!externs.has(st.fn)) D.push(diag('unknown-function', `"${st.fn}" is not a use'd function`, { suggestion: closest(st.fn, [...externs]), from: st.fn })); for (const a of st.args) checkExpr(a, null, new Map()); }
       else if ('arg' in st && st.arg) checkExpr(st.arg, null, new Map());
     };
     for (const eff of doc.effects || []) for (const st of eff) checkEff(st);
@@ -433,6 +463,11 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       if (st.op === StOp.Call) { // composing a store action: target is a store domain, method is one of its actions
         if (!storeDomains.has(st.target)) D.push(diag('unknown-action', `"${st.target}.${st.method}(…)": "${st.target}" is not a store. A page action mutates LOCAL state with push/set/patch/…; only a STORE action can be called like this.`, { suggestion: closest(st.target, [...storeDomains]), from: st.target }));
         else if (!storeMemberMap.get(st.target)?.has(st.method)) D.push(diag('unknown-action', `store "${st.target}" has no member "${st.method}".`, { suggestion: closest(st.method, [...(storeMemberMap.get(st.target) || [])]), from: st.method }));
+        for (const a of st.args) checkExpr(a, null, actionScope);
+        return;
+      }
+      if (st.op === StOp.Extern) { // calling a use'd function as a side-effect: `persist(messages)` (no muten state mutated)
+        if (!externs.has(st.fn)) D.push(diag('unknown-function', `"${st.fn}" is not a use'd function`, { suggestion: closest(st.fn, [...externs]), from: st.fn }));
         for (const a of st.args) checkExpr(a, null, actionScope);
         return;
       }
@@ -487,6 +522,21 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       for (let i = before; i < D.length; i++) if (!D[i].loc) D[i].loc = st.loc ?? null;
     };
     for (const st of a.body || []) checkStmt(st);
+  }
+
+  // styling under the oracle: validate every class() name against the framework's RESOLVED theme
+  // (Tailwind v4 Design System API, loaded by the orchestrator). Catches typos on theme tokens and
+  // utilities (`bg-primaryy`) + suggests the closest. Only runs with a framework present; base apps
+  // leave class() as the raw escape (no design system to check against).
+  if (ctx.classValidator?.available) {
+    for (const n of Object.values(nodes)) {
+      if (!Array.isArray(n.props.class)) continue;
+      for (const c of n.props.class) {
+        for (const issue of ctx.classValidator.check(typeof c === 'string' ? c : c.name)) {
+          D.push(diag('unknown-class', `class "${issue.cls}" is not a known class or theme token (define it in your stylesheet/theme, or fix the typo)`, { loc: n.loc, suggestion: issue.suggestion, from: issue.cls }));
+        }
+      }
+    }
   }
 
   return { ok: D.length === 0, diagnostics: D };

@@ -39,7 +39,7 @@ const ok = (l, c) => { console.log((c ? '✓' : '✗') + ' ' + l); if (!c) f++; 
 const form = reg.find((e) => e.handlers.submit);
 const email = reg.find((e) => e.placeholder === 'email');
 const pass = reg.find((e) => e.placeholder === 'password');
-const errored = () => reg.some((e) => e.className === 'field-error' && e.textContent);
+const errored = () => reg.some((e) => e.className === 'mu-field-error' && e.textContent);
 const done = () => reg.some((e) => e.tag === 'p' && e.textContent === 'true');
 
 form.handlers.submit({ preventDefault() {} });

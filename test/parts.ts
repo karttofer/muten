@@ -34,5 +34,9 @@ check('object param: $char.image → c.image', img?.props?.src?.parts?.[0]?.name
 check('action param: $onSave → addFav', btn?.props?.action === 'addFav', btn?.props?.action);
 check('action arg: $char.id → c.id', btn?.props?.arg?.name === 'c.id', JSON.stringify(btn?.props?.arg));
 
+// reactive class with a $param condition: `class(x when $flag)` must substitute the $param (regression: was a passthrough → toggle dropped)
+const boxCls = compose(parse('screen t\nPage { Box(flag: on) }').tree, { Box: parse('part Box(flag: bool) { Stack class(active when $flag) { Text "x" } }').parts.Box }).tree.children?.[0];
+check('class($param cond) substituted: $flag → on', boxCls?.props?.class?.[0]?.cond?.name === 'on', JSON.stringify(boxCls?.props?.class));
+
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL OK');
 process.exit(fails ? 1 : 0);
