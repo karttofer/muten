@@ -29,11 +29,11 @@ meta { title "Products" }
 entity Product { id text  title text  price text }
 state { products = query products : list<Product> }
 sources { products: "/products" }
-Page style(padding.lg, gap.md) {
+Page class("p-6 gap-4") {
   Title "Products" class("text-2xl font-bold")
   when products.loading { Text "Loading" class("opacity-60") }
   each products as p {
-    Stack style(gap.sm) class("p-4 rounded-lg shadow") {
+    Stack class("gap-2 p-4 rounded-lg shadow") {
       Link "{p.title}" -> "/product/{p.id}" class("font-semibold")
       Button "Add" -> cart.add(p.id) class("px-3 py-1")
     }
@@ -56,7 +56,7 @@ roundtrips('app: shell+routes', `api {
   base: "https://x.com"
 }
 shell {
-  Header style(row, between) {
+  Header class("flex flex-row justify-between") {
     Link "Shop" -> "/"
     Span "Cart {cart.count}"
   }

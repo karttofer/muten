@@ -33,6 +33,11 @@ export class Grammar {
   protected readonly toks: Token[];
   protected pos = 0;
   private readonly lineStarts: number[] = [0];
+  // When this Grammar parses an interpolation sub-expression (`{…}` from a larger string), it rebases its
+  // diagnostics onto the OUTER source, so an error inside `{…}` reports the real file line/col — not line 1
+  // of the isolated expression substring (the cause of "every interpolation error points at line 1").
+  private rebaseBase = 0;
+  private rebaseParent: Grammar | null = null;
 
   constructor(source: string) {
     this.toks = tokenize(source);
@@ -61,6 +66,7 @@ export class Grammar {
 
   /** A source index → { line, col }, by binary search over the recorded line offsets. */
   protected locOf(index: number): Loc {
+    if (this.rebaseParent) return this.rebaseParent.locOf(this.rebaseBase + index); // an interpolation sub-expr: resolve against the outer file
     let lo = 0, hi = this.lineStarts.length - 1;
     while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (this.lineStarts[mid] <= index) lo = mid; else hi = mid - 1; }
     return { line: lo + 1, col: index - this.lineStarts[lo] + 1 };
@@ -181,7 +187,10 @@ export class Grammar {
 
   // "Hi, {user.name}!" -> interpolation: literal text chunks interleaved with expressions.
   // Plain text with no `{ }` stays a plain string (the caller treats it as constant).
-  protected parseInterpolation(raw: string): string | Interp {
+  // `baseOffset` = the source index where `raw` (the string's content) begins, so errors inside `{…}` rebase
+  // onto the real file position. Callers pass `stringToken.pos + 1` (the char after the opening quote); 0 falls
+  // back to the old behavior (loc relative to the substring).
+  protected parseInterpolation(raw: string, baseOffset = 0): string | Interp {
     if (!raw.includes('{')) return raw;
     const parts: Array<string | Expr> = [];
     let cursor = 0;
@@ -191,7 +200,9 @@ export class Grammar {
       if (open > cursor) parts.push(raw.slice(cursor, open));
       const close = raw.indexOf('}', open);
       if (close < 0) { parts.push(raw.slice(open)); break; } // unbalanced: keep the rest verbatim
-      parts.push(new Grammar(raw.slice(open + 1, close)).parseExpr()); // {expr} -> full expression AST
+      const sub = new Grammar(raw.slice(open + 1, close)); // {expr} -> full expression AST
+      sub.rebaseParent = this; sub.rebaseBase = baseOffset + open + 1; // map its diagnostics back to the outer file
+      parts.push(sub.parseExpr());
       cursor = close + 1;
     }
     return { kind: Ek.Interp, parts };

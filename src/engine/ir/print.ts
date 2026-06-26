@@ -96,7 +96,6 @@ function printNode(n: IRNode, ind: string): string {
     if (p.bind) head += ` bind ${p.bind.includes('.') ? p.bind : '@' + p.bind}`;
     if (p.where) head += ` ${Mod.Where}(${p.where.join(', ')})`;
     if (p.columns) head += ` ${Mod.Columns}(${p.columns.join(', ')})`;
-    if (p.style) head += ` ${Mod.Style}(${p.style.join(', ')})`;
     if (p.class) head += ` ${Mod.Class}(${p.class.map(printClass).join(', ')})`;
     if (p.alt !== undefined) head += ` ${Mod.Alt} ${printStringProp(p.alt)}`;
     if (p.inputs) head += ` ${Mod.Inputs}(${printArgMap(p.inputs)})`;

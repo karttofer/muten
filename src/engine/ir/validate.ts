@@ -3,7 +3,6 @@
 // error is specific and suggests the closest candidate. The same Doc that compiles is validated,
 // so the editor and build never disagree. Used by the live linter, `muten lint`, and Vite.
 
-import { resolveToken, SUGGESTED, defaultTheme, isKnownTokenShape } from '#engine/style/tokens.js';
 import { diag, closest } from '#engine/shared/diagnostics.js';
 import { PRIMITIVE_NAMES, ACTION_OPS, PRIMITIVES } from '#engine/lang/manifest.js';
 import { Nt, Ek, StOp, BOp } from '#engine/shared/vocab.js';
@@ -242,6 +241,13 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
         const bodyScope = new Map(scope);
         const ent = elem ? doc.entities?.[elem] : undefined;
         if (ent) { bodyScope.set('id', 'uuid'); for (const [f, ft] of Object.entries(ent)) bodyScope.set(f, ft); } // `by`/`where`: element fields bound bare (item-implicit)
+        // the sort KEY must read the ROW's own field. A state/get/const key (`sort by sortKey`) reads ONE constant for
+        // every row, so the comparator is `(a,b)=>0` — a silent no-op that lints+builds green. Fail it CLOSED.
+        if (e.op === 'sort' || e.op === 'sortDesc') for (const r of collectRefs(e.body)) {
+          const h = r.split('.')[0];
+          if (!(h === 'id' || (ent && h in ent) || scope.has(h)) && (stateKeys.has(h) || getNames.has(h) || constNames.has(h)))
+            D.push(diag('sort-key-not-field', `\`${e.op} by ${r}\`: the key must be a field of the row${elem ? ` (${elem})` : ''}, but "${h}" is a ${stateKeys.has(h) ? 'state' : getNames.has(h) ? 'derived get' : 'const'} — sorting by a runtime variable is not supported (the comparator reads one constant for every row, so nothing sorts). Sort by a literal field${ent ? ` (e.g. \`${e.op} by ${Object.keys(ent)[0]}\`)` : ''}, or branch per key with \`when sortKey == "…"\`.`, { loc, from: h, suggestion: ent ? closest(h, ['id', ...Object.keys(ent)]) : null }));
+        }
         // sum/avg/min/max reduce a number projection (a `min` over text strings -> NaN);
         // count's body is a true/false condition, so it's exempt.
         if (e.op !== 'count' && e.op !== 'sort' && e.op !== 'sortDesc') { const bt = exprType(e.body, bodyScope); if (bt && bt !== 'number') D.push(diag('agg-type', `\`${e.op} …\` reduces a NUMBER, but the body is "${bt}". Use a number projection (count uses a true/false condition).`, { loc })); }
@@ -380,28 +386,21 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       for (const v of Object.values(props.inputs || {})) if (typeof v === 'string') checkRef(v, n);
       for (const v of Object.values(props.on || {})) if (typeof v === 'string') checkAction(v, n);
     }
-    if (Array.isArray(props.style)) {
-      const theme = ctx.theme || defaultTheme;
-      const hasValues = Object.keys(theme.space || {}).length > 0; // a real project theme is present
-      for (const t of props.style) {
-        if (!isKnownTokenShape(t)) {
-          // the family/atom must be one Muten accepts (engine is source of truth)
-          D.push(diag('unknown-token', `"${t}" is not an accepted style token`, { loc: n.loc, suggestion: closest(t, SUGGESTED), from: t }));
-        } else if (hasValues && resolveToken(t, theme) === null) {
-          // family is valid but the scale step isn't defined in this project's theme
-          D.push(diag('unknown-token', `"${t}": that step isn't in your theme scale`, { loc: n.loc, suggestion: closest(t, SUGGESTED), from: t }));
-        }
-      }
-    }
+    // Icon resolves to inline SVG at BUILD, so its name must be a static `set:name` literal. A dynamic/interpolated
+    // name (`Icon "{m.icon}"`, a per-row icon) lints clean today and then HARD-FAILS at `vite build` — catch it here.
+    if (n.type === Nt.Icon && typeof props.name === 'string' && (props.name.includes('{') || !props.name.includes(':')))
+      D.push(diag('icon-name', `Icon "${props.name}" must be a static "set:name" literal (e.g. \`Icon "lucide:settings"\`) — icons inline at build, so the name can't be dynamic/interpolated. For a per-row icon, branch over static Icons with \`when\`/\`match\` (or a \`part\` per icon).`, { loc: n.loc, from: props.name }));
     // expression references: when condition, each list, reactive Text/Image interpolation
     if (n.type === Nt.When && props.cond) checkExpr(props.cond, n.loc ?? null, scope);
     if (n.type === Nt.Each && props.list) checkExpr(props.list, n.loc ?? null, scope);
     if (props.arg && typeof props.arg === 'object' && 'kind' in props.arg) checkExpr(props.arg as Expr, n.loc ?? null, scope); // `-> action(arg)` on Button/Link/RowAction: arg was previously unchecked
     if (props.argRest) for (const a of props.argRest) checkExpr(a, n.loc ?? null, scope);                                     // 2nd+ args of a multi-arg call `-> f(a, b)`
+    if (Array.isArray(props.class)) for (const c of props.class) if (typeof c !== 'string' && c.cond) checkExpr(c.cond, n.loc ?? null, scope); // reactive `class(x when cond)`: the cond was unchecked → a stale state ref (e.g. a renamed state) passed lint but shipped a runtime ReferenceError
     const interps: StringPropValue[] = [];
     if ((n.type === Nt.Text || n.type === Nt.Title || n.type === Nt.Span) && props.value) interps.push(props.value);
     if (n.type === Nt.Image) { if (props.src) interps.push(props.src); if (props.alt) interps.push(props.alt); }
     if (n.type === Nt.Link && props.to) interps.push(props.to);
+    if (n.type === Nt.SearchField && props.placeholder) interps.push(props.placeholder); // placeholder interpolates ("Message #{channel}")
     if (props.label) interps.push(props.label); // Link/Button/RowAction labels interpolate too
     for (const ip of interps) {
       if (typeof ip === 'object' && 'kind' in ip && ip.kind === Ek.Interp) {
@@ -454,6 +453,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   // actions: a body may only mutate what `mutates` declares, using known ops
   for (const [name, a] of Object.entries(doc.actions || {})) {
     const declared = new Set(a.mutates || []);
+    for (const t of a.mutates || []) if (!stateKeys.has(t) && !storeDomains.has(t)) D.push(diag('undeclared-mutation', `action "${name}" declares \`mutates ${t}\` but "${t}" is not a declared state`, { suggestion: closest(t, [...stateKeys]), from: t })); // mutates targets were unchecked → renaming/typo'ing a state left `mutates oldName` lint-clean but a runtime ReferenceError
     const actionScope = new Map<string, string>(a.params?.length ? a.params.map((p) => [p.name, p.type] as [string, string]) : (a.input ? [[a.input, ''] as [string, string]] : [])); // typed params (or legacy `<- input` var) are in scope
     const paramNames = new Set((a.params || []).map((p) => p.name)); // for the item-shadow collision rule
     const checkStmtInner = (st: Stmt): void => {

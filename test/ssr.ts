@@ -27,8 +27,8 @@ ok('interpolation uses state initial', ssr(`screen c\nstate { name = "World" : t
 ok('when true renders body', ssr(`screen c\nstate { on = true : bool }\nPage { when on { Text "yes" } }`).includes('yes'));
 ok('when false omits body', !ssr(`screen c\nstate { on = false : bool }\nPage { when on { Text "no" } }`).includes('no'));
 
-// containers + style tokens survive as classes
-ok('containers + classes', ssr(`screen c\nPage style(padding.lg) { Title "T" }`).includes('<main class="mu-page t-padding-lg">'));
+// containers + class() pass straight through to the mu- base class
+ok('containers + classes', ssr(`screen c\nPage class("p-6") { Title "T" }`).includes('<main class="mu-page p-6">'));
 
 // HTML is escaped (no injection from data)
 ok('text is escaped', ssr(`screen c\nstate { x = "<b>hi</b>" : text }\nPage { Text "{x}" }`).includes('&lt;b&gt;'));

@@ -18,7 +18,7 @@ sources {
 
 Page {
   when characters.loading { Text "Loading…" }
-  Stack style(grid, gap.md) {
+  Stack class("grid gap-4") {
     each characters as c {
       Image "{c.image}"
       Text "{c.name}"

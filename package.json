@@ -1,6 +1,6 @@
 {
   "name": "@muten/core",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "AI-first frontend framework — compiles .muten files to vanilla JS + signals.",
   "repository": {
     "type": "git",
@@ -54,6 +54,10 @@
     "esbuild": "^0.28.1",
     "gbnf": "^0.1.41",
     "typescript": "^6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "@iconify/types": "^2.0.0"
+  },
+  "dependencies": {
+    "@iconify/utils": "^2.1.0"
   }
 }

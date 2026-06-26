@@ -3,7 +3,6 @@ import { parse } from '#engine/lang/parse.js';
 import { toDoc } from '#engine/ir/flatten.js';
 import { validate } from '#engine/ir/validate.js';
 import { ParseError } from '#engine/shared/diagnostics.js';
-import { mergeTheme } from '#engine/style/tokens.js';
 
 let fails = 0;
 const check = (label, ok, extra = '') => {
@@ -11,14 +10,6 @@ const check = (label, ok, extra = '') => {
   if (!ok) fails++;
 };
 const diagsOf = (src, ctx = {}) => validate(toDoc(parse(src)), ctx).diagnostics;
-
-// 1. invalid style token → suggests the closest one + gives a position
-{
-  const d = diagsOf('screen t\nPage style(gap.mdd) { Text "x" }', { theme: mergeTheme({ space: { md: '16px' } }) }).find((x) => x.code === 'unknown-token');
-  check('invalid token detected', !!d, 'no diagnostic');
-  check('suggests "gap.md"', d?.suggestion === 'gap.md', d?.suggestion);
-  check('has loc (line/col)', !!(d?.loc?.line), JSON.stringify(d?.loc));
-}
 
 // 2. @ref to a missing state → suggests the close state
 {
@@ -45,7 +36,7 @@ const diagsOf = (src, ctx = {}) => validate(toDoc(parse(src)), ctx).diagnostics;
 // 5. syntax error → ParseError with position
 {
   let err = null;
-  try { parse('screen t\nPage style(  {'); } catch (e) { err = e; }
+  try { parse('screen t\nPage class(  {'); } catch (e) { err = e; }
   check('throws ParseError', err instanceof ParseError, String(err));
   check('ParseError has loc', !!(err?.loc?.line), JSON.stringify(err?.loc));
 }
@@ -97,6 +88,35 @@ const diagsOf = (src, ctx = {}) => validate(toDoc(parse(src)), ctx).diagnostics;
   check('chained gets (filter->sort->avg) resolve', chain.every((x) => x.code !== 'unknown-ref'), JSON.stringify(chain.map((d) => d.code)));
   const typo = diagsOf(store + 'get won = opps.data where stage == "won"\nget bad = won.sum by nope', { kind: 'store' }).find((x) => x.code === 'unknown-ref');
   check('still flags a real field typo in the projection', !!typo, 'no diagnostic — over-permissive');
+}
+
+// 11. renaming a state must not leave dangling refs: a stale ref in a REACTIVE CLASS cond and a stale
+// `mutates` target were both lint-clean before (lint passed → build passed → runtime ReferenceError).
+{
+  const src = 'screen s\nstate { view = "online" : text }\naction show(t: text) mutates tab { tab.set(t) }\nPage { Button "x" -> show("o") class("on" when tab == "online") }';
+  const ds = diagsOf(src);
+  check('reactive class cond: stale state ref flagged', ds.some((d) => d.code === 'unknown-ref' && d.message.includes('"tab"')), JSON.stringify(ds.map((d) => d.code)));
+  check('action mutates: undeclared state target flagged', ds.some((d) => d.code === 'undeclared-mutation' && d.message.includes('tab')), JSON.stringify(ds.map((d) => d.code)));
+  const okClean = diagsOf('screen s\nstate { tab = "online" : text }\naction show(t: text) mutates tab { tab.set(t) }\nPage { Button "x" -> show("o") class("on" when tab == "online") }');
+  check('correct state name is clean (no false positive)', okClean.length === 0, JSON.stringify(okClean.map((d) => d.code)));
+}
+
+// 12. `sort by <state>` was fail-OPEN: the docs say the key must be a literal field, but the linter let a state
+// variable through and it compiled to a no-op comparator (same constant for every row → list never sorts).
+{
+  const ent = 'entity D { amount number  stage text }\n';
+  const bad = diagsOf(`screen s\n${ent}state { deals = [] : list<D>  sortKey = "amount" : text }\nget sorted = deals.sortDesc by sortKey\nPage { each sorted as d { Text "{d.stage}" } }`);
+  check('sort by a state variable flagged (no silent no-op)', bad.some((d) => d.code === 'sort-key-not-field'), JSON.stringify(bad.map((d) => d.code)));
+  const ok = diagsOf(`screen s\n${ent}state { deals = [] : list<D> }\nget sorted = deals.sortDesc by amount\nPage { each sorted as d { Text "{d.stage}" } }`);
+  check('sort by a real field is clean (no false positive)', ok.every((d) => d.code !== 'sort-key-not-field'), JSON.stringify(ok.map((d) => d.code)));
+}
+
+// 13. dynamic/interpolated Icon name was lint-clean but build-FAILS (icons inline at build → name must be static).
+{
+  const bad = diagsOf('screen s\nentity M { icon text }\nstate { items = [] : list<M> }\nPage { each items as m { Icon "{m.icon}" } }');
+  check('dynamic Icon name flagged at lint (not build)', bad.some((d) => d.code === 'icon-name'), JSON.stringify(bad.map((d) => d.code)));
+  const ok = diagsOf('screen s\nPage { Icon "lucide:settings" }');
+  check('static Icon name is clean (no false positive)', ok.every((d) => d.code !== 'icon-name'), JSON.stringify(ok.map((d) => d.code)));
 }
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL OK');

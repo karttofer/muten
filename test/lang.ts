@@ -3,13 +3,9 @@
 import { parse } from '#engine/lang/parse.js';
 import { toDoc } from '#engine/ir/flatten.js';
 import { compile } from '#engine/compile/compile.js';
-import { resolveToken, tokenClass, mergeTheme } from '#engine/style/tokens.js';
 
 let f = 0;
 const ok = (l, c, e = '') => { console.log((c ? '✓' : '✗') + ' ' + l + (c ? '' : '  ← ' + e)); if (!c) f++; };
-
-// a project theme (the engine ships NO values): tests that need scale/breakpoints pass this in
-const TH = mergeTheme({ space: { sm: '8px', md: '16px', lg: '24px' }, font: { lg: '20px' }, breakpoints: { md: '768px', lg: '1024px' } });
 
 // ternary in a when condition
 {
@@ -74,33 +70,46 @@ const TH = mergeTheme({ space: { sm: '8px', md: '16px', lg: '24px' }, font: { lg
   ok('non-empty list init', Array.isArray(st.initial) && st.initial[0].id === 'a', JSON.stringify(st.initial));
 }
 
-// responsive: numeric scale + breakpoint prefix
+// static page (no reactivity) → zero-runtime module (no signals, just innerHTML); class() passes straight through
 {
-  const s = parse('screen t\nPage { Stack style(cols.3, md:cols.4, gap.20) {} }').tree.children[0].props.style;
-  ok('numeric + bp tokens parse', JSON.stringify(s) === JSON.stringify(['cols.3', 'md:cols.4', 'gap.20']), JSON.stringify(s));
-  ok('bp resolves to base css', resolveToken('md:cols.4', TH) === resolveToken('cols.4', TH));
-  ok('numeric scale resolves (no theme needed)', resolveToken('gap.20') === 'gap:20px', resolveToken('gap.20'));
-  ok('bp class name', tokenClass('md:cols.4') === 't-md-cols-4', tokenClass('md:cols.4'));
-}
-// static page (no reactivity) → zero-runtime module (no signals, just innerHTML)
-{
-  const ir = parse('screen about\nPage style(gap.md, md:cols.2) { Title "Hi" h1  Text "Plain." Link "Home" -> "/" }');
-  const code = compile(toDoc(ir), {}, '', {}, {}, { format: 'module', theme: TH });
+  const ir = parse('screen about\nPage class("grid grid-cols-2 gap-4") { Title "Hi" h1  Text "Plain." Link "Home" -> "/" }');
+  const code = compile(toDoc(ir), {}, '', {}, {}, { format: 'module' });
   ok('static: NO runtime import', !code.includes("from 'virtual:muten/runtime'"), '');
   ok('static: uses innerHTML', code.includes('innerHTML'));
   ok('static: no signals/effects', !code.includes('signal(') && !code.includes('effect('));
-  ok('static: emits @media for bp token', code.includes('@media (min-width:768px)'), '');
-  // breakpoint rule DOUBLES its class selector for specificity → a responsive override beats a same-property
-  // base token even when that base token is re-emitted by a later-loaded page bundle (load-order race).
-  ok('bp rule doubles class for specificity', code.includes('@media (min-width:768px){.t-md-cols-2.t-md-cols-2{'), '');
+  ok('static: class() passes through to the base', code.includes('grid-cols-2'), '');
 }
-// theme is a PROJECT concern: a passed theme overrides the engine's default scale
+// `Icon "set:name"` inlines the SVG resolved at build (Iconify) — a static name, no JS/runtime shipped.
 {
-  const th = mergeTheme({ space: { md: '20px' } });
-  ok('project theme supplies the value', resolveToken('gap.md', th) === 'gap:20px', resolveToken('gap.md', th));
-  ok('engine ships NO value (default scale empty)', resolveToken('gap.md') === null, resolveToken('gap.md'));
-  const code = compile(toDoc(parse('screen t\nPage style(gap.md) { Text "x" }')), {}, '', {}, {}, { format: 'module', theme: th });
-  ok('compile honors project theme', code.includes('gap:20px'), '');
+  const ir = parse('screen s\nPage { Icon "lucide:settings" class("text-xl") }');
+  const code = compile(toDoc(ir), {}, '', {}, {}, { format: 'module', iconResolver: (r) => '<svg>ICON-' + r + '</svg>' });
+  ok('Icon: inlines the resolved SVG (build-time, no runtime)', code.includes('<svg>ICON-lucide:settings</svg>'), code.slice(0, 200));
+  ok('Icon: span carries the mu-icon base + user class', code.includes('mu-icon') && code.includes('text-xl'));
+}
+// `Video "url" controls loop muted` — a <video> whose bare-keyword flags become boolean attrs.
+{
+  const ir = parse('screen s\nstate { x = "" : text }\nPage { Video "clip.mp4" controls loop muted  Text "{x}" }');
+  const code = compile(toDoc(ir), {}, '', {}, {}, { format: 'module' });
+  ok('Video: a <video> element with src', code.includes("createElement('video')") && code.includes('clip.mp4'));
+  ok('Video: bare-keyword flags -> boolean props', code.includes('.controls = true') && code.includes('.loop = true') && code.includes('.muted = true'));
+}
+// SearchField placeholder INTERPOLATES (reactive): `"Message #{channel}"` tracks the state, not a literal `{channel}`
+{
+  const code = compile(toDoc(parse('screen s\nstate { channel = "general" : text  q = "" : text }\nPage { SearchField bind @q "Message #{channel}" }')), {}, '', {}, {}, { format: 'module' });
+  ok('SearchField placeholder is a reactive effect', /effect\(\(\) => \{[^}]*\.placeholder =/.test(code) && code.includes('channel'), code.slice(0, 120));
+}
+// `persist` backs a local state with localStorage: hydrate on load (fallback to the declared initial) + save on change
+{
+  const code = compile(toDoc(parse('screen s\nstate { mode = "dark" : text persist }\nPage { Text "{mode}" }')), {}, '', {}, {}, { format: 'module' });
+  ok('persist: hydrates from localStorage with fallback', code.includes('signal(__loadLocal("muten:mode", "dark"))'), '');
+  ok('persist: saves on every change via an effect', code.includes('effect(() => __saveLocal("muten:mode", mode.get()))'), '');
+}
+// `match subject { v -> … }` is SUGAR: desugars to one `when subject == "v"` per arm (validate/compile see Whens).
+{
+  const ir = parse('screen s\nstate { status = "" : text }\nPage { match status { active -> Text "ARM_A"  lead -> Text "ARM_L" } }');
+  const code = compile(toDoc(ir), {}, '', {}, {}, { format: 'module' });
+  ok('match: both arms compile (one reactive When each)', code.includes('ARM_A') && code.includes('ARM_L'));
+  ok('match: arms keyed on the subject value', code.includes('active') && code.includes('lead') && code.includes('status'));
 }
 // const: compile-time immutable SCALAR, inlined; rejects JS-style object literals
 {

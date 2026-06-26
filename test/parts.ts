@@ -38,5 +38,10 @@ check('action arg: $char.id → c.id', btn?.props?.arg?.name === 'c.id', JSON.st
 const boxCls = compose(parse('screen t\nPage { Box(flag: on) }').tree, { Box: parse('part Box(flag: bool) { Stack class(active when $flag) { Text "x" } }').parts.Box }).tree.children?.[0];
 check('class($param cond) substituted: $flag → on', boxCls?.props?.class?.[0]?.cond?.name === 'on', JSON.stringify(boxCls?.props?.class));
 
+// a part can carry an Icon "set:name": the `name` prop substitutes the $param, so `Icon $icon` inlines to a
+// STATIC literal (`Icon "lucide:users"`) → still tree-shaken at build. (Component principle for icon-laden UIs.)
+const navIcon = compose(parse('screen t\nPage { NavItem(icon: "lucide:users") }').tree, { NavItem: parse('part NavItem(icon: text) { Icon $icon }').parts.NavItem }).tree.children?.[0];
+check('part passes Icon: $icon → "lucide:users" (static after inline)', navIcon?.type === 'Icon' && navIcon?.props?.name === 'lucide:users', JSON.stringify(navIcon?.props));
+
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL OK');
 process.exit(fails ? 1 : 0);

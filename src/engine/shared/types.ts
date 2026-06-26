@@ -22,7 +22,7 @@ export type Source = string | { url: string; method?: string; headers?: { [k: st
 
 /** A manifest prop's type hint (`"?"` marks optional) — the vocabulary the linter shows. */
 export type PropHint =
-  | 'text' | 'text?' | 'tokens?' | 'state' | 'action' | 'action?' | 'expr' | 'expr?'
+  | 'text' | 'text?' | 'state' | 'action' | 'action?' | 'expr' | 'expr?'
   | 'fields' | 'route' | 'name' | 'map?' | 'clauses?' | 'ident';
 
 /** A primitive's manifest entry: its vocabulary + docs (the single source the linter reads).
@@ -95,7 +95,7 @@ export interface ParamRef { $param: string; }
 export type StringPropValue = string | Interp | ParamRef;
 
 /** The prop names that a primitive's positional string can land in (manifest `.string`). */
-export type StringPropName = 'value' | 'label' | 'src' | 'alt' | 'placeholder' | 'submitLabel';
+export type StringPropName = 'value' | 'label' | 'src' | 'alt' | 'name' | 'placeholder' | 'submitLabel';
 
 
 // ── 5. Action / effect statements ────────────────────────────────────────────
@@ -157,6 +157,7 @@ export interface StateDef {
   refresh?: number;   // parked: `query x every Ns` (polling rejected, kept so it still parses)
   live?: boolean;     // `query x live` -> a WebSocket subscription (server pushes); socket closes via onCleanup
   initial?: Value;    // declared initial literal (when not query-backed)
+  persist?: boolean;  // `state { x = … : T persist }` — auto load/save to localStorage (survives reload)
   loc?: Loc;
 }
 
@@ -201,13 +202,6 @@ export interface Route {
 
 /** A theme scale: step name (md/lg/…) → its CSS value ("16px", "1.5", "768px"). */
 export interface ThemeScale { [step: string]: string; }
-export interface Theme {
-  space: ThemeScale;
-  font: ThemeScale;
-  weight: ThemeScale;
-  leading: ThemeScale;
-  breakpoints: ThemeScale;
-}
 /** The theme.muten file as parsed: section name (space/colors/radius/…) → its scale. Open set:
  *  parseTheme reads any `<section> { <step> "value" }`, so colors/radius come for free. */
 export type ThemeRaw = { [section: string]: ThemeScale };
@@ -224,8 +218,6 @@ export interface ThemeAdapter {
   prefix: { [section: string]: string };  // section -> CSS var prefix (colors -> `--color-`); fallback `--<section>-`
   blocks: ThemeBlock[];
 }
-/** A token family resolver: (modifier, theme) → CSS declarations, or null if unresolved. */
-export type FamilyFn = (m: string, t: Theme) => string | null;
 
 
 // ── 8. Nested IR (parser output) ─────────────────────────────────────────────
@@ -240,6 +232,8 @@ export interface NodeProps {
   label?: StringPropValue;
   src?: StringPropValue;
   alt?: StringPropValue;
+  name?: StringPropValue;   // Icon "set:name" (a static Iconify ref)
+  flags?: string[];         // Video boolean attrs: controls / autoplay / loop / muted / playsinline
   placeholder?: StringPropValue;
   submitLabel?: StringPropValue;
   // structure & wiring
@@ -255,7 +249,6 @@ export interface NodeProps {
   // modifiers
   where?: string[];
   columns?: string[];
-  style?: string[];
   class?: Array<string | ClassCond>;   // static look classes + reactive toggles, e.g. `active when isOpen`
   inputs?: ArgMap;
   on?: ArgMap;
@@ -368,10 +361,10 @@ export interface StoreSlice {
 
 export interface CompileOpts {
   format?: Fmt;
-  theme?: Theme;
   stores?: { [domain: string]: StoreSlice };
   storeCode?: string;                // standalone build only: `.store` slices inlined (CLI SSG has no virtual modules -> `muten build` bakes them into the page)
   api?: { [name: string]: Value };   // app-wide backend config (base + default headers) applied to `sources`
+  iconResolver?: (ref: string) => string;  // `Icon "set:name"` -> inline SVG, resolved at build (Iconify). Provided by the vite plugin; absent in unit/SSG -> Icon renders empty.
 }
 
 /** One screen's resolved compile context shared by compile.ts (DOM) and logic.ts.
@@ -409,7 +402,6 @@ export interface StoreInput {
 /** The pre-computed pieces an emit target assembles into the final output (HTML/module/store). */
 export interface EmitParts {
   screen: string;
-  tokenCss: string;
   projectCss: string;
   data: { [name: string]: Value };
   sources: { [name: string]: Value };
@@ -444,7 +436,6 @@ export interface ValidateCtx {
   parts?: string[];
   stores?: string[];
   storeMembers?: { [domain: string]: string[] };  // each store's members (state + gets + actions) -> catch typos like `cart.kount`
-  theme?: Theme;
   kind?: FileKind;
   classValidator?: ClassValidator;                // when set, class() names are validated against the framework's theme
 }
@@ -492,7 +483,6 @@ export interface CompletionResult {
   state: CompletionState[];
   actions: string[];
   primitives: string[];
-  theme: Theme;
 }
 
 // ── 13. Runtime shapes (the browser side) ────────────────────────────────────

@@ -12,9 +12,10 @@ import { toDoc } from '#engine/ir/flatten.js';
 import { load, loadAllParts, findStores } from '#engine/project/load.js';
 import { validate } from '#engine/ir/validate.js';
 import { compileModule, compileStore } from '#engine/compile/compile.js';
-import { mergeTheme, emitTheme } from '#engine/style/tokens.js';
+import { emitTheme } from '#engine/style/tokens.js';
+import { makeIconResolver } from './icons.js';
 import { Nt } from '#engine/shared/vocab.js';
-import type { IR, Theme, ThemeRaw, ClassValidator, MutenOptions, StoreSlice, PartDef } from '#engine/shared/types.js';
+import type { IR, ThemeRaw, ClassValidator, MutenOptions, StoreSlice, PartDef } from '#engine/shared/types.js';
 
 // virtual module IDs this plugin owns (leading \0 prevents Vite from resolving them to disk).
 const RID = 'virtual:muten/runtime';
@@ -26,8 +27,7 @@ const RUNTIME = readFileSync(join(here, 'runtime.js'), 'utf8'); // browser runti
 
 export default function muten(options: MutenOptions = {}): Plugin {
   const storeEnabled = options.store !== false;
-  let theme: Theme = mergeTheme(options.theme);  // merged scale for style() tokens; overridden by theme.muten
-  let themeRaw: ThemeRaw = options.theme || {};  // FULL theme.muten (incl. colors/radius) for the native theme emit
+  let themeRaw: ThemeRaw = options.theme || {};  // FULL theme.muten (incl. colors/radius) -> emitTheme CSS vars
   let classValidator: ClassValidator | undefined; // class() checker backed by the framework's design system
   let appRoot = process.cwd();
   let parts: { [name: string]: PartDef } = {};
@@ -82,7 +82,6 @@ if (root) {
     appIr = existsSync(rootFile) ? parse(readFileSync(rootFile, 'utf8')) : undefined;
     const themeFile = join(appRoot, 'theme.muten');
     themeRaw = existsSync(themeFile) ? (parse(readFileSync(themeFile, 'utf8')).theme || {}) : (options.theme || {});
-    theme = mergeTheme(themeRaw);
     stylesHref = null;
     let stylesPath: string | null = null;
     for (const name of ['styles.css', 'styles.scss']) {
@@ -123,7 +122,13 @@ if (root) {
       await loadProject();
     },
 
-    resolveId(id: string) { if (id === RID || id === SHELL || id.startsWith(STORE_PREFIX)) return '\0' + id; },
+    resolveId(id: string) {
+      if (id === RID || id === SHELL || id.startsWith(STORE_PREFIX)) return '\0' + id;
+      // `~/` = the project's `src/` root: ONE absolute path that resolves identically from any .muten file,
+      // so the AI never counts `../` (relative depth is pure entropy for a model). Works from page + store
+      // virtual modules alike (those have no disk anchor, so relative wouldn't resolve anyway).
+      if (id.startsWith('~/')) return join(appRoot, 'src', id.slice(2)).replace(/\\/g, '/');
+    },
 
     load(id: string) {
       if (id === '\0' + RID) return RUNTIME; // browser runtime, served as-is
@@ -143,7 +148,7 @@ if (root) {
         const doc = toDoc({ ...(appIr || {}), screen: 'shell', entities: {}, state: {}, actions: {}, tree }); // spread appIr so shell `imports` survive; chrome stays state/action-free
         // shell + pages emit only their token CSS; reset/base lives in the project stylesheet
         // loaded once via main, so there's no duplicate .stack fighting the cascade.
-        return compileModule(doc, {}, '', {}, {}, { stores: storesMeta, theme });
+        return compileModule(doc, {}, '', {}, {}, { stores: storesMeta, iconResolver: makeIconResolver(appRoot) });
       }
 
     },
@@ -164,7 +169,7 @@ if (root) {
       // page-to-store action composition. Without it, both are wrongly rejected.
       const storeMembers: { [d: string]: string[] } = {};
       for (const [d, m] of Object.entries(storesMeta)) storeMembers[d] = [...(m.state || []), ...(m.gets || []), ...(m.actions || [])];
-      const { ok, diagnostics } = validate(loaded.doc, { parts: loaded.partNames, stores: Object.keys(storesMeta), storeMembers, theme, classValidator });
+      const { ok, diagnostics } = validate(loaded.doc, { parts: loaded.partNames, stores: Object.keys(storesMeta), storeMembers, classValidator });
       if (!ok) throw new Error('muten: ' + diagnostics.map((d) => d.message).join(' · '));
 
       const customNames = [...new Set(Object.values(loaded.doc.nodes).filter((n) => n.type === Nt.Custom).map((n) => n.props?.component))];
@@ -175,7 +180,7 @@ if (root) {
         if (existsSync(path)) components[name] = readFileSync(path, 'utf8');
       }
 
-      return { code: compileModule(loaded.doc, loaded.data, loaded.styles.css, components, loaded.sources, { stores: storesMeta, theme, api: appIr?.api || {} }), map: null };
+      return { code: compileModule(loaded.doc, loaded.data, loaded.styles.css, components, loaded.sources, { stores: storesMeta, api: appIr?.api || {}, iconResolver: makeIconResolver(appRoot) }), map: null };
     },
 
     handleHotUpdate(ctx: HmrContext) {

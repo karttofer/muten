@@ -286,7 +286,13 @@ export class Logic {
             return o;
           });
         }
-        out.push(`${exp}const ${name} = signal(${JSON.stringify(initial)});`);
+        if (def.persist) { // localStorage-backed: hydrate from storage (fallback to the declared initial), save on every change
+          const key = JSON.stringify('muten:' + name);
+          out.push(`${exp}const ${name} = signal(__loadLocal(${key}, ${JSON.stringify(initial)}));`);
+          out.push(`effect(() => __saveLocal(${key}, ${name}.get()));`);
+        } else {
+          out.push(`${exp}const ${name} = signal(${JSON.stringify(initial)});`);
+        }
       }
     }
     return out.join('\n  ');

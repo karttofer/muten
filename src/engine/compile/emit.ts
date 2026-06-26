@@ -47,6 +47,8 @@ function dataLayer(parts: EmitParts): string {
   const __API = ${JSON.stringify(parts.api)};
   const __UUIDS = ${JSON.stringify(parts.queryUuids)};
   const __DELAY = 450;
+  const __loadLocal = (k, fb) => { try { const v = localStorage.getItem(k); return v === null ? fb : JSON.parse(v); } catch (e) { return fb; } };
+  const __saveLocal = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
   const __req = ${sourceRequest.toString()};
   const __rows = ${sourceRows.toString()};
   const __fill = (name, rows) => { const ids = __UUIDS[name] || []; return rows.map((r) => { const o = { ...r }; for (const f of ids) if (o[f] === null || o[f] === undefined) o[f] = __id(); return o; }); };
@@ -54,7 +56,7 @@ function dataLayer(parts: EmitParts): string {
   function __write(name, method, id, body) { const s = __SOURCES[name]; const q = __req(s, __API); let url = q.url; if (id != null) { url = (url.charAt(url.length - 1) === '/' ? url.slice(0, -1) : url) + '/' + encodeURIComponent(id); } const init = { method: method, headers: { ...q.headers } }; if (body != null) { init.body = JSON.stringify(body); if (!init.headers['content-type'] && !init.headers['Content-Type']) init.headers['content-type'] = 'application/json'; } return fetch(url, init).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return method === 'DELETE' ? null : r.json(); }); }
   function __refetch(name, params, sig) { const q = __req(__SOURCES[name], __API); const qs = Object.keys(params).map((k) => encodeURIComponent(k) + '=' + encodeURIComponent(params[k])).join('&'); const url = qs ? q.url + (q.url.indexOf('?') >= 0 ? '&' : '?') + qs : q.url; sig.set({ ...sig.get(), loading: true, error: null }); fetch(url, { method: q.method, headers: { ...q.headers } }).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then((j) => sig.set({ data: __fill(name, __rows(j, q.at)), loading: false, error: null })).catch((e) => sig.set({ ...sig.get(), loading: false, error: String(e) })); }
   function __send(url, method, body) { let d = { url: url, method: method }; const ci = url.indexOf(':'); if (ci > 0 && __API[url.slice(0, ci)]) d = { api: url.slice(0, ci), url: url.slice(ci + 1), method: method }; const q = __req(d, __API); const init = { method: q.method, headers: { ...q.headers } }; if (body != null) { init.body = JSON.stringify(body); if (!init.headers['content-type'] && !init.headers['Content-Type']) init.headers['content-type'] = 'application/json'; } return fetch(q.url, init).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.status === 204 ? null : r.json().catch(() => null); }); }
-  function query(name, live) { const sig = signal({ data: [], loading: true, error: null }); if (live) { const q = __req(__SOURCES[name], __API); const ws = new WebSocket(q.url); ws.onmessage = (e) => sig.set({ data: __fill(name, __rows(JSON.parse(e.data), q.at)), loading: false, error: null }); ws.onerror = () => sig.set({ ...sig.get(), loading: false, error: 'socket error' }); onCleanup(() => ws.close()); } else { __fetch(name).then((d) => sig.set({ data: d, loading: false, error: null })).catch((e) => sig.set({ data: [], loading: false, error: String(e) })); } return sig; }`;
+  function query(name, live) { const sig = signal({ data: [], loading: true, error: null }); if (live) { let ws, tries = 0, dead = false; const open = () => { const q = __req(__SOURCES[name], __API); ws = new WebSocket(q.url); ws.onopen = () => { tries = 0; }; ws.onmessage = (e) => { try { sig.set({ data: __fill(name, __rows(JSON.parse(e.data), q.at)), loading: false, error: null }); } catch { /* ignore a malformed frame */ } }; ws.onerror = () => { sig.set({ ...sig.get(), error: 'socket error' }); }; ws.onclose = () => { if (dead) return; sig.set({ ...sig.get(), loading: false }); setTimeout(open, Math.min(1000 * 2 ** tries++, 15000)); }; }; open(); onCleanup(() => { dead = true; if (ws) ws.close(); }); } else { __fetch(name).then((d) => sig.set({ data: d, loading: false, error: null })).catch((e) => sig.set({ data: [], loading: false, error: String(e) })); } return sig; }`;
 }
 
 // One .store domain slice -> shared ESM module (state + get + actions, no DOM).
@@ -77,7 +79,7 @@ ${parts.effectDecls}
 // Static page (no reactivity): plain HTML, no runtime import, no signals (Astro-like zero-JS).
 export function emitStatic(parts: EmitParts): string {
   return `export const screen = ${JSON.stringify(parts.screen)};
-export const css = ${JSON.stringify(`${parts.tokenCss}\n${parts.projectCss}`)};
+export const css = ${JSON.stringify(parts.projectCss)};
 export const meta = ${JSON.stringify(parts.meta)};
 export function mount(app) { app.innerHTML = ${JSON.stringify(parts.staticHtml)}; return app; }
 `;
@@ -133,9 +135,7 @@ export function emitStaticHtml(parts: EmitParts): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${metaTags(parts.meta, parts.screen)}
 <style>
-  /* engine: only the used tokens */
-  ${parts.tokenCss}
-  /* project: bring-your-own-theme */
+  /* project: bring-your-own-theme (Tailwind / your CSS + theme.muten vars) */
   ${parts.projectCss}
 </style>
 </head>
@@ -152,7 +152,7 @@ export function emitModule(parts: EmitParts): string {
 ${parts.storeImports}
 ${parts.externImports}
 export const screen = ${JSON.stringify(parts.screen)};
-export const css = ${JSON.stringify(`${parts.tokenCss}\n${parts.projectCss}`)};
+export const css = ${JSON.stringify(parts.projectCss)};
 export const meta = ${JSON.stringify(parts.meta)};
 
 export function mount(app, __params) {
@@ -183,9 +183,7 @@ export function emitHtml(parts: EmitParts): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${metaTags(parts.meta, parts.screen)}
 <style>
-  /* engine: only the used tokens — no base styles (those are the project's stylesheet) */
-  ${parts.tokenCss}
-  /* project: overrides the above via the cascade (bring-your-own-theme) */
+  /* project: bring-your-own-theme (Tailwind / your CSS + theme.muten vars) */
   ${parts.projectCss}
 </style>
 </head>

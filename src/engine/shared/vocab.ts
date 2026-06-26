@@ -36,9 +36,9 @@ export enum Kw {
   Screen = 'screen', Entity = 'entity', State = 'state', Store = 'store',
   Get = 'get', Effect = 'effect', Action = 'action', Mutates = 'mutates',
   Mock = 'mock', Sources = 'sources', Routes = 'routes', Shell = 'shell',
-  Part = 'part', Const = 'const', Theme = 'theme', Query = 'query', Every = 'every', Live = 'live', Param = 'param', Api = 'api', Body = 'body', Meta = 'meta',
+  Part = 'part', Const = 'const', Theme = 'theme', Query = 'query', Every = 'every', Live = 'live', Persist = 'persist', Param = 'param', Api = 'api', Body = 'body', Meta = 'meta',
   Use = 'use', From = 'from',
-  When = 'when', Each = 'each', As = 'as', Where = 'where', By = 'by', With = 'with', If = 'if', Else = 'else',
+  When = 'when', Each = 'each', Match = 'match', As = 'as', Where = 'where', By = 'by', With = 'with', If = 'if', Else = 'else',
   Guard = 'guard', Not = 'not', And = 'and', Or = 'or', Contains = 'contains',
   Required = 'required', Min = 'min', Max = 'max',
   True = 'true', False = 'false', Null = 'null',
@@ -49,7 +49,7 @@ export enum Nt {
   // containers (semantic landmarks + layout)
   Shell = 'Shell', Header = 'Header', Nav = 'Nav', Sidebar = 'Sidebar', Footer = 'Footer', Page = 'Page', Stack = 'Stack',
   // content
-  Text = 'Text', Title = 'Title', Span = 'Span', Image = 'Image',
+  Text = 'Text', Title = 'Title', Span = 'Span', Image = 'Image', Icon = 'Icon', Video = 'Video',
   // interactive
   Link = 'Link', Button = 'Button', Form = 'Form', SearchField = 'SearchField',
   DataTable = 'DataTable', RowAction = 'RowAction', Custom = 'Custom',
@@ -88,5 +88,5 @@ export enum StOp { Push = 'push', Set = 'set', Reset = 'reset', Toggle = 'toggle
 /** Node modifiers (post-primitive). */
 export enum Mod {
   Bind = 'bind', Submit = 'submit', Where = 'where', Columns = 'columns',
-  Style = 'style', Class = 'class', Alt = 'alt', Inputs = 'inputs', On = 'on',
+  Class = 'class', Alt = 'alt', Inputs = 'inputs', On = 'on',
 }

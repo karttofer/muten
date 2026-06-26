@@ -43,12 +43,11 @@ linknode   ::= "Link" (sp (commonpart | "->" ws string))* (ws block)?
 actionnode ::= ("RowAction" | "Button") (sp (commonpart | actionarrow))* (ws block)?
 actionarrow ::= "->" ws dotted (ws "(" ws expr? ws ")")?
 customnode ::= "Custom" sp ident (sp modifier)*
-plainnode  ::= ("Stack" | "Header" | "Nav" | "Sidebar" | "Footer" | "Page" | "Text" | "Title" | "Span" | "Image" | "SearchField" | "DataTable" | "Form" | "slot") (sp commonpart)* (ws block)?
+plainnode  ::= ("Stack" | "Header" | "Nav" | "Sidebar" | "Footer" | "Page" | "Text" | "Title" | "Span" | "Image" | "Icon" | "Video" | "SearchField" | "DataTable" | "Form" | "slot") (sp commonpart)* (ws block)?
 commonpart ::= string | ref | level | modifier
 level      ::= "h" [1-6]
 
-modifier   ::= stylemod | classmod | bindmod | submitmod | wheremod | columnsmod | altmod | inputsmod | onmod
-stylemod   ::= "style" ws "(" ws styletoken (ws "," ws styletoken)* ws ")"
+modifier   ::= classmod | bindmod | submitmod | wheremod | columnsmod | altmod | inputsmod | onmod
 classmod   ::= "class" ws "(" ws classitem (ws "," ws classitem)* ws ")"
 classitem  ::= (string | ident) (sp "when" sp expr)?
 bindmod    ::= "bind" sp (ref | dotted)
@@ -62,13 +61,6 @@ onmod      ::= "on" ws "(" ws argpairs ws ")"
 argpairs   ::= argpair (ws "," ws argpair)*
 argpair    ::= ident ws ":" ws argval
 argval     ::= string | number | ref | dotted
-
-styletoken ::= (breakpoint ":")? (atom | family "." tokenmod)
-breakpoint ::= "sm" | "md" | "lg" | "xl"
-atom       ::= "row" | "column" | "wrap" | "grid" | "grow" | "center" | "between" | "bold" | "italic"
-family     ::= "gap" | "padding" | "margin" | "cols" | "rows" | "text" | "weight" | "leading" | "align" | "justify" | "items" | "width" | "height"
-tokenmod   ::= ("x." | "y.")? scaleseg
-scaleseg   ::= ident | number
 
 # expressions — the parser's precedence ladder (no left recursion: iterate, don't self-reference first)
 expr      ::= ternary

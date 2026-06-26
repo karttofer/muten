@@ -12,7 +12,6 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PRIMITIVES, PRIMITIVE_NAMES, ACTION_OPS } from '../dist/engine/lang/manifest.js';
-import { FAMILY_NAMES, ATOM_NAMES, BREAKPOINT_NAMES } from '../dist/engine/style/tokens.js';
 
 const SELF = dirname(fileURLToPath(import.meta.url));
 const alt = (xs) => xs.map((x) => `"${x}"`).join(' | ');
@@ -74,8 +73,7 @@ plainnode  ::= (${alt(PLAIN)}) (sp commonpart)* (ws block)?
 commonpart ::= string | ref | level | modifier
 level      ::= "h" [1-6]
 
-modifier   ::= stylemod | classmod | bindmod | submitmod | wheremod | columnsmod | altmod | inputsmod | onmod
-stylemod   ::= "style" ws "(" ws styletoken (ws "," ws styletoken)* ws ")"
+modifier   ::= classmod | bindmod | submitmod | wheremod | columnsmod | altmod | inputsmod | onmod
 classmod   ::= "class" ws "(" ws classitem (ws "," ws classitem)* ws ")"
 classitem  ::= (string | ident) (sp "when" sp expr)?
 bindmod    ::= "bind" sp (ref | dotted)
@@ -89,13 +87,6 @@ onmod      ::= "on" ws "(" ws argpairs ws ")"
 argpairs   ::= argpair (ws "," ws argpair)*
 argpair    ::= ident ws ":" ws argval
 argval     ::= string | number | ref | dotted
-
-styletoken ::= (breakpoint ":")? (atom | family "." tokenmod)
-breakpoint ::= ${alt(BREAKPOINT_NAMES)}
-atom       ::= ${alt(ATOM_NAMES)}
-family     ::= ${alt(FAMILY_NAMES)}
-tokenmod   ::= ("x." | "y.")? scaleseg
-scaleseg   ::= ident | number
 
 # expressions — the parser's precedence ladder (no left recursion: iterate, don't self-reference first)
 expr      ::= ternary
@@ -147,4 +138,4 @@ mkdirSync(join(SELF, '..', 'grammar'), { recursive: true });
 const out = join(SELF, '..', 'grammar', 'muten.gbnf');
 writeFileSync(out, grammar);
 console.log(`✓ wrote grammar/muten.gbnf — ${defined.size} rules, all references resolve`);
-console.log(`  primitives: ${PLAIN.length} plain · ${LINK.length} link · ${ACTION.length} action · style: ${FAMILY_NAMES.length} families + ${ATOM_NAMES.length} atoms`);
+console.log(`  primitives: ${PLAIN.length} plain · ${LINK.length} link · ${ACTION.length} action`);

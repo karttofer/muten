@@ -4,67 +4,76 @@
 // carries a `doc` and a `snippet` so the surface and its help never drift apart.
 // Language changes start here (and in compile/), then re-run the highlight generator.
 
-import { SUGGESTED, resolveToken } from '#engine/style/tokens.js';
 import type { Primitive } from '#engine/shared/types.js';
 
 export const PRIMITIVES: { [name: string]: Primitive } = {
   Stack: {
-    props: { style: 'tokens?' }, children: true,
-    doc: 'Vertical stack (flex column) — its identity. For a horizontal layout, use a region with style(row). Card look: class(card).',
+    props: {}, children: true,
+    doc: 'Vertical stack (flex column) — its identity. For a horizontal layout, use class("flex flex-row"). Card look: class(card).',
     snippet: 'Stack {\n\t$0\n}',
   },
   Header: {
-    props: { style: 'tokens?' }, children: true,
-    doc: 'Page header landmark (<header>). Lay it out with style(row, between, center, …).',
-    snippet: 'Header style(row, between, center) {\n\t$0\n}',
+    props: {}, children: true,
+    doc: 'Page header landmark (<header>). Lay it out with class("flex flex-row items-center justify-between …").',
+    snippet: 'Header class("flex flex-row items-center justify-between") {\n\t$0\n}',
   },
   Nav: {
-    string: 'label', props: { label: 'text?', style: 'tokens?' }, children: true,
-    doc: 'Navigation landmark (<nav>). Optional label → aria-label (disambiguates multiple navs). `Nav "Primary" style(row, gap.md) { … }`.',
-    snippet: 'Nav style(row, gap.md) {\n\t$0\n}',
+    string: 'label', props: { label: 'text?' }, children: true,
+    doc: 'Navigation landmark (<nav>). Optional label → aria-label (disambiguates multiple navs). `Nav "Primary" class("flex flex-row gap-4") { … }`.',
+    snippet: 'Nav class("flex flex-row gap-4") {\n\t$0\n}',
   },
   Sidebar: {
-    props: { style: 'tokens?' }, children: true,
-    doc: 'Complementary landmark (<aside>). Position with style(left) or style(right).',
-    snippet: 'Sidebar style(left) {\n\t$0\n}',
+    props: {}, children: true,
+    doc: 'Complementary landmark (<aside>). Position/size with class().',
+    snippet: 'Sidebar {\n\t$0\n}',
   },
   Footer: {
-    props: { style: 'tokens?' }, children: true,
+    props: {}, children: true,
     doc: 'Footer landmark (<footer>).',
-    snippet: 'Footer style(padding.md) {\n\t$0\n}',
+    snippet: 'Footer {\n\t$0\n}',
   },
   Page: {
-    props: { style: 'tokens?' }, children: true,
-    doc: 'The page content root (<main>) — one per route, mounts into the shell’s `slot`. No imposed look; lay it out with style().',
+    props: {}, children: true,
+    doc: 'The page content root (<main>) — one per route, mounts into the shell’s `slot`. No imposed look; lay it out with class().',
     snippet: 'Page {\n\t$0\n}',
   },
   Text: {
-    string: 'value', props: { value: 'text', style: 'tokens?' }, children: false, interp: true,
+    string: 'value', props: { value: 'text' }, children: false, interp: true,
     doc: 'Paragraph text (<p>). Interpolates state reactively: `Text "Hi, {user.name}"`.',
     snippet: 'Text "$1"',
   },
   Title: {
-    string: 'value', props: { value: 'text', style: 'tokens?' }, children: false, interp: true,
+    string: 'value', props: { value: 'text' }, children: false, interp: true,
     doc: 'Heading. Level via keyword: `Title "Hi" h2` → <h2> (h1…h6; default h1). Prefer one h1 per page. Interpolates state.',
     snippet: 'Title "$1"',
   },
   Span: {
-    string: 'value', props: { value: 'text', style: 'tokens?' }, children: false, interp: true,
+    string: 'value', props: { value: 'text' }, children: false, interp: true,
     doc: 'Inline text (<span>). Interpolates state: `Span "{cart.total}"`.',
     snippet: 'Span "$1"',
   },
   Image: {
-    string: 'src', props: { src: 'text', alt: 'text', style: 'tokens?' }, children: false, interp: true,
+    string: 'src', props: { src: 'text', alt: 'text' }, children: false, interp: true,
     doc: 'Image (<img>). `alt` is required (a11y/SEO): `Image "{p.image}" alt "{p.title}"`. Use alt "" for decorative images.',
     snippet: 'Image "{${1:item.image}}" alt "${2:description}"',
   },
+  Icon: {
+    string: 'name', props: { name: 'text' }, children: false,
+    doc: 'Icon from ANY library via Iconify `set:name`: `Icon "lucide:settings"`, `Icon "tabler:home"`. Inlined as SVG at build (only the icons you use ship — tree-shaken, no runtime). Color + size via class() (uses currentColor + 1em). The set must be installed: `npm i -D @iconify-json/<set>` (scaffold pre-installs lucide). Name is a STATIC literal (resolved at build).',
+    snippet: 'Icon "${1:lucide:settings}"',
+  },
+  Video: {
+    string: 'src', props: { src: 'text' }, children: false, interp: true,
+    doc: 'Video (<video>). Boolean controls are bare keywords: `controls autoplay loop muted playsinline`. `Video "clip.mp4" controls` · `Video "~/media/intro.mp4" autoplay loop muted`. Size via class().',
+    snippet: 'Video "${1:clip.mp4}" controls',
+  },
   SearchField: {
-    string: 'placeholder', props: { bind: 'state', placeholder: 'text?' }, children: false,
-    doc: 'Search input two-way bound to a text state.',
+    string: 'placeholder', props: { bind: 'state', placeholder: 'text?' }, children: false, interp: true,
+    doc: 'Search input two-way bound to a text state. The placeholder interpolates: `SearchField bind @draft "Message #{channel}"`.',
     snippet: 'SearchField bind(${1:search}) "${2:Search by name}"',
   },
   DataTable: {
-    props: { data: 'state', where: 'clauses?', columns: 'fields', style: 'tokens?' }, children: true,
+    props: { data: 'state', where: 'clauses?', columns: 'fields' }, children: true,
     doc: 'Reactive table over a list/query. Static `where` filters are pushed to the query; dynamic ones stay reactive.',
     snippet: 'DataTable @${1:items}\n\tcolumns(${2:name})',
   },
@@ -74,7 +83,7 @@ export const PRIMITIVES: { [name: string]: Primitive } = {
     snippet: 'RowAction "${1:Delete}" -> ${2:action}(row.id)',
   },
   Button: {
-    string: 'label', props: { label: 'text?', action: 'action?', arg: 'expr?', style: 'tokens?' }, children: true, interp: true,
+    string: 'label', props: { label: 'text?', action: 'action?', arg: 'expr?' }, children: true, interp: true,
     doc: 'Clickable button → runs an action. Label interpolates (`Button "{x}"`) OR use `{ }` children for a clickable card. `-> action(arg)`; arg may be a ref or a literal.',
     snippet: 'Button "${1:label}" -> ${2:action}($3)',
   },
@@ -84,7 +93,7 @@ export const PRIMITIVES: { [name: string]: Primitive } = {
     snippet: 'Form bind(${1:draft}) submit(${2:createItem}) "${3:Save}"',
   },
   Link: {
-    string: 'label', props: { label: 'text?', to: 'route', style: 'tokens?' }, children: true, interp: true,
+    string: 'label', props: { label: 'text?', to: 'route' }, children: true, interp: true,
     doc: 'Navigation link: `Link "Catalog" -> "/catalog"`. Label interpolates, OR use `{ }` children for a clickable card that navigates. Client-side (no full reload).',
     snippet: 'Link "${1:label}" -> "/${2:route}"',
   },
@@ -110,20 +119,19 @@ export const PRIMITIVES: { [name: string]: Primitive } = {
   },
 };
 
-export const MODIFIERS = ['bind', 'submit', 'where', 'columns', 'style', 'class', 'alt', 'inputs', 'on'];
+export const MODIFIERS = ['bind', 'submit', 'where', 'columns', 'class', 'alt', 'inputs', 'on'];
 export const MODIFIER_DOCS = {
   bind: 'Two-way bind to a @state, e.g. `bind @search`.',
   submit: 'Action to run on form submit, e.g. `submit createUser`.',
   where: 'Filter clauses: `where(role == admin, name contains @q)`.',
   columns: 'Columns to show: `columns(name, email, role)`.',
-  style: 'Layout & typography tokens (Muten builds, doesn’t skin): `style(row, gap.md, text.lg)`.',
-  class: 'Raw CSS class(es) for LOOK — your CSS or a CSS framework: `class(card)` or `class("flex gap-4")`. Muten stays agnostic about appearance.',
+  class: 'The ONE way to style: raw CSS class(es) — Tailwind utilities (`class("flex flex-row gap-4")`) or your own CSS (`class("card")`, backed by styles.css using theme.muten CSS vars). Muten stays agnostic about appearance.',
   alt: 'Required accessible/SEO text for an Image: `alt "{p.title}"`. Use "" for decorative images.',
   inputs: 'Custom component inputs: `inputs(data: @sales)`.',
   on: 'Custom component events wired to actions: `on(select: pick)`.',
 };
 
-export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'every', 'live', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'where', 'by', 'with', 'and', 'or', 'not', 'contains', 'use', 'from'];
+export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'every', 'live', 'persist', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'where', 'by', 'with', 'and', 'or', 'not', 'contains', 'use', 'from'];
 export const KEYWORD_DOCS = {
   screen: 'Declares the screen name: `screen users_dashboard`.',
   entity: 'Declares a data shape + validation: `entity User { name text required  email email required  password text min:8 }` (implicit uuid id). Constraints: `required`, `min:N`, `max:N`.',
@@ -149,6 +157,7 @@ export const KEYWORD_DOCS = {
   part: 'Reusable composition: `part Card(item: Item, onPick: action) { ... }`. Pass OBJECTS (`$item.field`) and ACTION callbacks (`-> $onPick(...)`). Inlined at build time.',
   param: 'Declares a route param read from the URL: `param id` for a route `/x/:id`. Usable in interpolation/`when`/expressions like a read-only string.',
   query: 'An async data source. The state exposes `.loading`, `.error` and `.data`.',
+  persist: 'Backs a local state with localStorage: `state { theme = "dark" : text persist }`. Hydrates from storage on load (falls back to the declared initial) and saves on every change — survives reload. For page-local state; not for query-backed.',
   every: 'Poll a query on a timer: `query orders every 5s` (also `500ms`, `2m`). Silent auto-refetch — keyed reconciliation updates only the rows that changed (no full re-render, no loading flash).',
   if: 'Conditional INSIDE an action body: `if <expr> { … } else { … }` — the only branching in actions (toggles, validation, add-or-remove).',
   when: 'Conditional render: `when <expr> { ... }`.',
@@ -176,5 +185,3 @@ export const ACTION_OP_DOCS = {
 };
 
 export const PRIMITIVE_NAMES = Object.keys(PRIMITIVES);
-export const TOKEN_NAMES = SUGGESTED; // curated suggestions; validation accepts the full OPEN set
-export { resolveToken };

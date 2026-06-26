@@ -6,13 +6,12 @@
 // Static filters (role == admin) are pushed to the query; dynamic ones (name contains @q) stay
 // reactive. A page with no reactivity compiles to plain HTML with zero runtime (Astro-like).
 
-import { tokenClass, resolveToken, defaultTheme } from '#engine/style/tokens.js';
 import { Nt, Ek, Fmt, Fk } from '#engine/shared/vocab.js';
 import { customValue, CONTAINERS, parseClause, editableFields } from '#engine/compile/helpers.js';
 import { emitStore, emitStatic, emitStaticHtml, emitSsr, emitModule, emitHtml } from '#engine/compile/emit.js';
 import { Logic } from '#engine/compile/logic.js';
 import type {
-  Doc, NodeProps, Theme, Scope, Interp, StringPropValue, Value,
+  Doc, NodeProps, Scope, Interp, StringPropValue, Value,
   CompileOpts, CompileCtx, EditableField, FieldConstraint, StoreInput, EmitParts,
 } from '#engine/shared/types.js';
 
@@ -30,7 +29,6 @@ export function compileStore(input: StoreInput = {}, data: { [name: string]: Val
 
 export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectCss = '', components: { [name: string]: string } = {}, sources: { [name: string]: Value } = {}, opts: CompileOpts = {}): string {
   const { nodes, rootId, state, entities, screen } = doc;
-  const theme: Theme = opts.theme || defaultTheme; // scale from the project; empty defaults otherwise
 
   let lines: string[] = [];
   let hasSlot = false; // a shell with `slot` returns its outlet from mount() so the router can target it
@@ -39,15 +37,12 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   // into their own mount functions before splicing them back at runtime.
   const capture = (emit: () => void): string[] => { const saved = lines; lines = []; emit(); const out = lines; lines = saved; return out; };
 
-  // style(...) -> atomic token classes; track which tokens are used so only those reach the CSS.
-  const usedTokens = new Set<string>();
+  // class() = raw CSS classes passed straight through (the one styling path).
   const classFor = (base: string, props: NodeProps): string => {
-    for (const token of props.style || []) usedTokens.add(token);
-    // style() = analyzable Muten tokens; class() = raw CSS classes passed straight through.
     // conditional class (`name when cond`) is omitted here and toggled reactively by genDynamics.
     // Every primitive's base class is `mu-`-prefixed so muten NEVER collides with a CSS framework or
     // your own classes (a framework may ship its own .stack/.card/…); your look goes through class().
-    return ['mu-' + base, ...(props.style || []).map(tokenClass), ...(props.class || []).filter((c): c is string => typeof c === 'string')].join(' ');
+    return ['mu-' + base, ...(props.class || []).filter((c): c is string => typeof c === 'string')].join(' ');
   };
 
   // Shared compile context + the behaviour compiler that reads it (see logic.ts). `usedStores`
@@ -135,7 +130,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`const el_${id} = document.createElement('input');`);
         lines.push(`el_${id}.type = 'search';`);
         lines.push(`el_${id}.className = ${JSON.stringify(classFor('search', p))};`);
-        if (typeof p.placeholder === 'string') lines.push(`el_${id}.placeholder = ${JSON.stringify(p.placeholder)};`);
+        genInterpAttr(id, 'placeholder', p.placeholder); // static OR interpolated ("Message #{channel}" stays reactive)
         lines.push(`effect(() => { if (el_${id}.value !== ${sig}.get()) el_${id}.value = ${sig}.get(); });`); // two-way: state->input so `.reset()` clears the box; guarded to avoid yanking the caret
         lines.push(`el_${id}.addEventListener('input', (e) => ${sig}.set(e.target.value));`);
         genDynamics(id, p); // wire on(enter: send) / on(...) + conditional class on the input
@@ -295,6 +290,26 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         break;
       }
 
+      case Nt.Icon: { // `Icon "set:name"` -> inline SVG resolved at build (Iconify); static name, no JS shipped
+        const ref = typeof p.name === 'string' ? p.name : '';
+        lines.push(`const el_${id} = document.createElement('span');`);
+        lines.push(`el_${id}.className = ${JSON.stringify(classFor('icon', p))};`);
+        lines.push(`el_${id}.innerHTML = ${JSON.stringify(opts.iconResolver ? opts.iconResolver(ref) : '')};`);
+        lines.push(`${parentVar}.appendChild(el_${id});`);
+        genDynamics(id, p);
+        break;
+      }
+
+      case Nt.Video: {
+        lines.push(`const el_${id} = document.createElement('video');`);
+        lines.push(`el_${id}.className = ${JSON.stringify(classFor('video', p))};`);
+        genInterpAttr(id, 'src', p.src);
+        for (const f of p.flags || []) lines.push(`el_${id}.${f === 'playsinline' ? 'playsInline' : f} = true;`);
+        lines.push(`${parentVar}.appendChild(el_${id});`);
+        genDynamics(id, p);
+        break;
+      }
+
       case Nt.When: {
         // conditional render: effect mounts children when the condition becomes true, removes them
         // when it becomes false. Comment node is the stable insertion anchor.
@@ -437,6 +452,8 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
       case Nt.Span: return `<span${cls('span')}>${escHtml(strOf(p.value))}</span>`;
       case Nt.Title: { const lvl = p.level || 'h1'; return `<${lvl}${cls('title')}>${escHtml(strOf(p.value))}</${lvl}>`; }
       case Nt.Image: return `<img${cls('image')} src="${escAttr(strOf(p.src))}" alt="${escAttr(strOf(p.alt))}">`;
+      case Nt.Icon: return `<span${cls('icon')}>${opts.iconResolver ? opts.iconResolver(strOf(p.name)) : ''}</span>`;
+      case Nt.Video: return `<video${cls('video')} src="${escAttr(strOf(p.src))}"${(p.flags || []).map((f) => ` ${f}`).join('')}></video>`;
       case Nt.Link: return `<a${cls('link')} href="${escAttr(strOf(p.to) || '/')}">${(n.children && n.children.length) ? kids() : escHtml(strOf(p.label))}</a>`;
       case Nt.Button: return `<button${cls('button')}>${(n.children && n.children.length) ? kids() : escHtml(strOf(p.label))}</button>`;
       default: return '';
@@ -469,18 +486,6 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
     }
   }
 
-  // emit CSS for only the tokens used (atomic, cacheable classes); a breakpoint token
-  // (md:cols.3) is wrapped in its @media query.
-  const tokenCss = [...usedTokens].map((token) => {
-    const css = resolveToken(token, theme); if (!css) return '';
-    const cls = tokenClass(token);
-    const colon = token.indexOf(':'); const bp = colon > 0 && theme.breakpoints[token.slice(0, colon)];
-    // A breakpoint rule DOUBLES its class selector (`.c.c`) for higher specificity, so a responsive override
-    // always beats a same-property base token — even when that base token is re-emitted in a later-loaded
-    // page bundle (atomic classes aren't deduped across shell/pages, so otherwise load order would decide).
-    return bp ? `@media (min-width:${bp}){.${cls}.${cls}{${css}}}` : `.${cls}{${css}}`;
-  }).filter(Boolean).join('\n');
-
   // host-written Custom components, inlined (each exposes `mount(el, props, on)`). Wrapped in an
   // IIFE, so `export` keywords are stripped: `export function mount` inside a function would be
   // an illegal export and break the whole module (blank page).
@@ -500,7 +505,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   if (metaIn.description && !meta['og:description']) meta['og:description'] = metaIn.description;
 
   const parts: EmitParts = {
-    screen, tokenCss, projectCss, data, sources, api: opts.api || {}, meta, queryUuids,
+    screen, projectCss, data, sources, api: opts.api || {}, meta, queryUuids,
     stateDecls, paramDecls, actionDecls, getDecls, effectDecls, componentDecls, storeImports, storeDecls: opts.storeCode || '', externImports,
     renderBody, staticHtml: staticHtml ?? '', hasSlot,
   };

@@ -10,18 +10,9 @@ import { composeDoc } from '#engine/ir/compose.js';
 import { validate } from '#engine/ir/validate.js';
 import { closest, diag, ParseError } from '#engine/shared/diagnostics.js';
 import { PRIMITIVE_NAMES } from '#engine/lang/manifest.js';
-import { mergeTheme } from '#engine/style/tokens.js';
-import type { Theme, PartDef, Route, Diagnostic, ValidateResult, StateDef, CompletionResult, CompletionState } from '#engine/shared/types.js';
+import type { PartDef, Route, Diagnostic, ValidateResult, StateDef, CompletionResult, CompletionState } from '#engine/shared/types.js';
 
 type Parts = { [name: string]: PartDef };
-
-// Load theme.muten so the editor validates token VALUES against the actual scale, not just shape.
-export function projectTheme(filePath: string): Theme {
-  const appRoot = findAppRoot(filePath);
-  if (!appRoot) return mergeTheme({});
-  try { return mergeTheme(parse(fs.readFileSync(join(appRoot, 'theme.muten'), 'utf8')).theme || {}); }
-  catch { return mergeTheme({}); }
-}
 
 // Loads parts from a folder without resolving styles (the linter doesn't need them).
 function loadPartsLite(dir: string): Parts {
@@ -152,7 +143,7 @@ export function analyze(filePath: string, text: string): ValidateResult {
   }
   const parts = projectParts(filePath);
   const { doc } = composeDoc(ir, parts); // resolve parts (typos flagged) + hoist state -> flat doc
-  return validate(doc, { parts: Object.keys(parts), stores: projectStores(filePath), storeMembers: projectStoreMembers(filePath), theme: projectTheme(filePath) });
+  return validate(doc, { parts: Object.keys(parts), stores: projectStores(filePath), storeMembers: projectStoreMembers(filePath) });
 }
 
 // Autocomplete context: parts, state, and actions visible to this file across the whole app.
@@ -170,5 +161,5 @@ export function completion(filePath: string, text: string): CompletionResult {
   for (const [n, d] of Object.entries(ir?.state || {})) addState(n, d);
   for (const def of Object.values(parts)) for (const [n, d] of Object.entries(def.state || {})) addState(n, d); // from used parts
 
-  return { parts: partList, state: stateList, actions: Object.keys(ir?.actions || {}), primitives: PRIMITIVE_NAMES, theme: projectTheme(filePath) };
+  return { parts: partList, state: stateList, actions: Object.keys(ir?.actions || {}), primitives: PRIMITIVE_NAMES };
 }

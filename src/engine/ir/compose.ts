@@ -63,6 +63,7 @@ function subProps(props: NodeProps, args: ArgMap): NodeProps {
   if (props.label !== undefined) out.label = subStringProp(props.label, args);
   if (props.src !== undefined) out.src = subStringProp(props.src, args);
   if (props.alt !== undefined) out.alt = subStringProp(props.alt, args);
+  if (props.name !== undefined) out.name = subStringProp(props.name, args); // Icon "set:name" — a part can pass the icon (`Icon $icon`), inlined to a static literal so it tree-shakes
   if (props.placeholder !== undefined) out.placeholder = subStringProp(props.placeholder, args);
   if (props.submitLabel !== undefined) out.submitLabel = subStringProp(props.submitLabel, args);
   if (props.cond !== undefined) out.cond = subExpr(props.cond, args);

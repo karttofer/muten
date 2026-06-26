@@ -13,11 +13,11 @@ const accepts = (src) => {
 };
 
 const VALID = {
-  'counter (state+action+style+button)':
+  'counter (state+action+class+button)':
 `screen home
 state { count = 0 : number }
 action inc mutates count { count.set(count + 1) }
-Page style(padding.lg, gap.md) {
+Page class("p-6 gap-4") {
   Title "Count: {count}" h1
   Button "+1" -> inc
 }`,
@@ -37,7 +37,6 @@ Page {
 
 const INVALID = {
   '// JS comment (muten uses #)':                  'screen home\n// hero\nPage { Text "x" }',
-  'Tailwind in style() — max-w':                   'screen home\nPage style(max-w.2xl) { Text "x" }',
   'Button navigating to a /route (only Link can)': 'screen home\nPage { Button "Go" -> /signup }',
   'inline {} object type':                         'screen home\nstate { d = {} : { name text } }\nPage { Text "x" }',
 };

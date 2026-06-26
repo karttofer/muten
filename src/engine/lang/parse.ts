@@ -7,7 +7,7 @@
 import { ParseError } from '#engine/shared/diagnostics.js';
 import { PRIMITIVES } from '#engine/lang/manifest.js';
 import { Grammar } from '#engine/lang/grammar.js';
-import { Tk, Pn, Kw, Nt, Mod, StOp } from '#engine/shared/vocab.js';
+import { Tk, Pn, Kw, Nt, Mod, StOp, Ek, BOp } from '#engine/shared/vocab.js';
 import type {
   IR, IRNode, NodeProps, StringPropName, Stmt, IfStmt, Expr, Interp, Value, Level,
   Entity, FieldType, EntityConstraints, FieldConstraint,
@@ -25,6 +25,7 @@ const INTERPOLATES = new Set<string>(
 
 const mapFieldType = (raw: string): FieldType => (raw === 'text' ? 'string' : raw); // `text` is the user-facing alias for `string`
 const isLevel = (word: string): word is Level => /^h[1-6]$/.test(word);             // heading level h1..h6
+const VIDEO_FLAGS = new Set(['controls', 'autoplay', 'loop', 'muted', 'playsinline']); // <video> boolean attrs (bare keywords)
 
 export class Parser extends Grammar {
   // Built once per parse. Keys double as membership tests: an ident not in a map
@@ -45,14 +46,13 @@ export class Parser extends Grammar {
       [Mod.Submit, (props: NodeProps) => { const paren = this.at(Tk.Punct, Pn.ParenL); if (paren) this.next(); props.submit = this.parseDotted(); if (paren) this.eat(Tk.Punct, Pn.ParenR); }],
       [Mod.Where, (props: NodeProps) => { props.where = this.parseParenList(() => this.rebuildClause()); }],
       [Mod.Columns, (props: NodeProps) => { props.columns = this.parseParenList(() => this.eat(Tk.Ident).v); }],
-      // repeatable modifiers MERGE (a second `style()`/`class()` appends, never overwrites the first)
-      [Mod.Style, (props: NodeProps) => { props.style = [...(props.style || []), ...this.parseParenList(() => this.parseStyleToken())]; }],
+      // a second `class()` appends, never overwrites the first
       [Mod.Class, (props: NodeProps) => { props.class = [...(props.class || []), ...this.parseParenList(() => { // raw look classes + `name when cond`
         const name = this.at(Tk.String) ? this.next().v : this.eat(Tk.Ident).v;
         if (this.at(Tk.Ident, Kw.When)) { this.next(); return { name, cond: this.parseExpr() }; }
         return name;
       })]; }],
-      [Mod.Alt, (props: NodeProps) => { const paren = this.at(Tk.Punct, Pn.ParenL); if (paren) this.next(); props.alt = this.parseInterpolation(this.eat(Tk.String).v); if (paren) this.eat(Tk.Punct, Pn.ParenR); }],  // Image a11y/SEO alt text
+      [Mod.Alt, (props: NodeProps) => { const paren = this.at(Tk.Punct, Pn.ParenL); if (paren) this.next(); const t = this.eat(Tk.String); props.alt = this.parseInterpolation(t.v, t.pos + 1); if (paren) this.eat(Tk.Punct, Pn.ParenR); }],  // Image a11y/SEO alt text
       [Mod.Inputs, (props: NodeProps) => { props.inputs = { ...props.inputs, ...this.parseArgs() }; }],   // Custom inputs(k: value, ...)
       [Mod.On, (props: NodeProps) => { props.on = { ...props.on, ...this.parseArgs() }; }],               // Custom on(event: action, ...)
     ]);
@@ -175,8 +175,9 @@ export class Parser extends Grammar {
       else { initial = this.next().v; hasInitial = true; }                                       // bare enum value
       this.eat(Tk.Punct, Pn.Colon);
       const type = this.parseType();
+      const persist = this.at(Tk.Ident, Kw.Persist) ? (this.next(), true) : undefined; // `: T persist` -> localStorage-backed
       const loc = this.locOf(nameTok.pos);
-      target[nameTok.v] = source ? { type, source, refresh, live, loc } : { type, initial: hasInitial ? initial : null, loc };
+      target[nameTok.v] = source ? { type, source, refresh, live, loc } : { type, initial: hasInitial ? initial : null, persist, loc };
     }
     this.eat(Tk.Punct, Pn.BraceR);
   }
@@ -237,7 +238,7 @@ export class Parser extends Grammar {
   // Explicit non-REST request (escape hatch): `post "client:/path" body expr` or `delete "client:/path"`.
   private parseRequest(): Stmt {
     const method = this.eat(Tk.Ident).v.toUpperCase();
-    const url = this.parseInterpolation(this.eat(Tk.String).v);
+    const ut = this.eat(Tk.String); const url = this.parseInterpolation(ut.v, ut.pos + 1);
     let body: Expr | null = null;
     if (this.at(Tk.Ident, Kw.Body)) { this.next(); body = this.parseExpr(); }
     return { op: StOp.Request, method, url, body };
@@ -433,13 +434,16 @@ export class Parser extends Grammar {
     while (reading) {
       const tok = this.peek();
       switch (tok.t) {
-        case Tk.String: { const key = STRING_PROP[type] || 'label'; props[key] = INTERPOLATES.has(type) ? this.parseInterpolation(this.next().v) : this.next().v; break; }
+        case Tk.String: { const key = STRING_PROP[type] || 'label'; const t = this.next(); props[key] = INTERPOLATES.has(type) ? this.parseInterpolation(t.v, t.pos + 1) : t.v; break; }
         case Tk.Param: { const key = STRING_PROP[type] || 'label'; props[key] = { $param: this.next().v }; break; } // part param standing in for the string
         case Tk.Ref: props.data = this.next().v; break;                            // positional @ref = data (DataTable @rows)
         case Tk.Arrow: this.parseArrow(type, props); break;                        // -> "/route" (Link) or -> action(arg)
         case Tk.Ident: {
           const word = tok.v;
           if (type === Nt.Title && isLevel(word)) { this.next(); props.level = word; break; } // heading level (h1..h6)
+          if (type === Nt.Video && VIDEO_FLAGS.has(word)) { this.next(); (props.flags = props.flags || []).push(word); break; } // <video> boolean attr
+          if (word === 'style' && this.toks[this.pos + 1]?.v === Pn.ParenL)         // `style(...)` was removed; point the AI at the one styling path
+            throw new ParseError('`style(...)` was removed — style with `class(...)` instead (Tailwind utilities, or your own CSS backed by theme.muten CSS vars).', this.locOf(tok.pos));
           const applyModifier = this.modifiers.get(word);                          // table keys are the valid modifiers
           if (!applyModifier) { reading = false; break; }                          // unknown ident starts a sibling node
           this.next();
@@ -447,7 +451,7 @@ export class Parser extends Grammar {
           break;
         }
         case Tk.Punct:
-          if (tok.v === Pn.BraceL) { this.next(); while (!this.at(Tk.Punct, Pn.BraceR)) children.push(this.parseNode()); this.eat(Tk.Punct, Pn.BraceR); }
+          if (tok.v === Pn.BraceL) { this.next(); while (!this.at(Tk.Punct, Pn.BraceR)) { if (this.at(Tk.Ident, Kw.Match)) children.push(...this.parseMatch()); else children.push(this.parseNode()); } this.eat(Tk.Punct, Pn.BraceR); }
           reading = false;                                                         // any punct (including `}`) closes the node
           break;
         default:
@@ -482,9 +486,31 @@ export class Parser extends Grammar {
   private parseChildren(): IRNode[] {
     this.eat(Tk.Punct, Pn.BraceL);
     const children: IRNode[] = [];
-    while (!this.at(Tk.Punct, Pn.BraceR)) children.push(this.parseNode());
+    while (!this.at(Tk.Punct, Pn.BraceR)) {
+      if (this.at(Tk.Ident, Kw.Match)) children.push(...this.parseMatch()); // `match` desugars to one When per arm
+      else children.push(this.parseNode());
+    }
     this.eat(Tk.Punct, Pn.BraceR);
     return children;
+  }
+
+  // `match <expr> { value -> node|{…}  … }`: render the arm whose value the subject equals. SUGAR — desugars to
+  // one `when <expr> == "value"` per arm, so validate + compile only ever see plain When nodes. Cuts the N-whens
+  // boilerplate of rendering an enum (status badges, deal stages, …) that every real app hits.
+  private parseMatch(): IRNode[] {
+    const head = this.eat(Tk.Ident, Kw.Match);
+    const subject = this.parseExpr();
+    this.eat(Tk.Punct, Pn.BraceL);
+    const arms: IRNode[] = [];
+    while (!this.at(Tk.Punct, Pn.BraceR)) {
+      const value = this.at(Tk.String) ? this.next().v : this.eat(Tk.Ident).v; // enum value: bare ident or quoted
+      this.eat(Tk.Arrow);                                                       // `->`
+      const children = this.at(Tk.Punct, Pn.BraceL) ? this.parseChildren() : [this.parseNode()];
+      const cond: Expr = { kind: Ek.Bin, op: BOp.Eq, left: subject, right: { kind: Ek.Lit, value } };
+      arms.push({ type: Nt.When, props: { cond }, children, loc: this.locOf(head.pos) });
+    }
+    this.eat(Tk.Punct, Pn.BraceR);
+    return arms;
   }
 
   // IDENT optionally parameterized: `text` or `list<User>`.
@@ -494,16 +520,6 @@ export class Parser extends Grammar {
     return type;
   }
 
-  // Style token: ident + optional breakpoint prefix (md:) + dotted scale (.md / .3 / .x.md).
-  // Segments may be idents or numbers, so numeric scales (gap.20, cols.3) parse correctly.
-  private parseStyleToken(): string {
-    const segment = () => (this.at(Tk.Number) ? this.next().v : this.eat(Tk.Ident).v);
-    let token = segment();
-    if (this.at(Tk.Punct, Pn.Colon)) { this.next(); token += ':' + segment(); }     // breakpoint prefix: md:
-    while (this.at(Tk.Punct, Pn.Dot)) { this.next(); token += '.' + segment(); }     // scale suffix: .md | .3 | .x.md
-    return token;
-  }
-
   // IDENT(.IDENT)* -> "cart.total". A `$param` head resolves at compose time.
   private parseDotted(): string {
     let path = this.at(Tk.Param) ? '$' + this.next().v : this.eat(Tk.Ident).v;
@@ -511,7 +527,7 @@ export class Parser extends Grammar {
     return path;
   }
 
-  // `( item, item, ... )` with a caller-supplied item reader (used by style/class/columns/where).
+  // `( item, item, ... )` with a caller-supplied item reader (used by class/columns/where).
   private parseParenList<T>(readItem: () => T): T[] {
     this.eat(Tk.Punct, Pn.ParenL);
     const items: T[] = [];

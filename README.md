@@ -36,7 +36,7 @@ action add mutates products, draft <- p {
   draft.reset()                                     # then clear the form
 }
 
-Page style(column, gap.md) {
+Page class("flex flex-col gap-4") {
   Form bind(draft) submit(add) "Add product"
 
   each products.sortDesc by price as p {             # render the list, sorted
@@ -95,7 +95,7 @@ that needs the full React ecosystem, and it doesn't pretend to be.
 
 | Area | What you get |
 |---|---|
-| **UI** | declarative primitives (layout, text, forms, tables, links) · `when`/`each` control flow · `style()` layout tokens + `class()` look (reactive: `class(active when isOpen)`) · `on(event: action)` on any element · **`on(enter: action)`** synthetic event on inputs (fires only on Enter key - no Custom needed for Enter-to-submit): `SearchField bind(draft) on(enter: send)` |
+| **UI** | declarative primitives (layout, text, forms, tables, links) · `when`/`each` control flow · `class("…")` is the single styling path - layout AND look (reactive: `class(active when isOpen)`) · `on(event: action)` on any element · **`on(enter: action)`** synthetic event on inputs (fires only on Enter key - no Custom needed for Enter-to-submit): `SearchField bind(draft) on(enter: send)` |
 | **State** | local `state` · app-global `store` · derived `get` · `action`s with `if/else` · fine-grained signals. A page action can **call a store action** (`cart.add(d)  draft.reset()`): store + local work in one handler |
 | **Lists** | bounded ops, no raw `map`/`reduce`: inline objects (`push({…})`) · in-place `patch` · filtered `each…where` · aggregates `sum`/`count`/`avg`/`min`/`max` · `sort`/`sortDesc` |
 | **Forms** | a `Form` auto-built from an entity, one input per field: `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select), with built-in validation |
@@ -234,9 +234,10 @@ file-level conventions (≤500 lines, honest types, data-table dispatch, no magi
 
 ## Styling & escape hatch
 
-muten imposes no theme. A page lays itself out with `style(…)` tokens (analyzable, resolved against
-`theme.muten`) and skins itself via `class("…")` (your CSS / Tailwind / anything). For behavior the
-primitives can't express, drop to a `Custom` component (`src/components/<Name>.js`).
+muten imposes no theme. There is ONE way to style: `class("…")` (your CSS / Tailwind / anything) carries both
+layout and look. `theme.muten` holds the design values and muten emits them as `:root` CSS custom properties
+(`--space-md`, `--color-primary`, ...) that your CSS / `class()` consumes. For behavior the primitives can't
+express, drop to a `Custom` component (`src/components/<Name>.js`).
 
 ## Status & roadmap (honest)
 
