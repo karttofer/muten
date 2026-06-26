@@ -55,6 +55,7 @@ export class Parser extends Grammar {
           return t.v;
         }
         const name = this.eat(Tk.Ident).v;
+        this.nestGuard(name); // `class("x" aria(…))` — modifiers are siblings, not nested
         if (this.at(Tk.Ident, Kw.When)) { this.next(); return { name, cond: this.parseExpr() }; }
         return name;
       })]; }],
@@ -572,11 +573,17 @@ export class Parser extends Grammar {
   }
 
   // `( key: value, ... )`: the args of a part instance or Custom inputs/on.
+  // modifiers attach to the node, never inside another modifier's () — turn the JSX-props slip (`class("x" aria(…))`) into a message that teaches, not a cryptic "expected ident".
+  private nestGuard(name: string): void {
+    if (this.at(Tk.Punct, Pn.ParenL)) throw new ParseError(`modifiers don't nest: \`${name}(…)\` attaches to the node, not inside another modifier's (). Write each as a sibling — e.g. \`Stack class(…) ${name}(…) { … }\`.`, this.locOf(this.peek().pos));
+  }
+
   private parseArgs(): ArgMap {
     this.eat(Tk.Punct, Pn.ParenL);
     const args: ArgMap = {};
     while (!this.at(Tk.Punct, Pn.ParenR)) {
       const key = this.eat(Tk.Ident).v;
+      this.nestGuard(key);
       this.eat(Tk.Punct, Pn.Colon);
       args[key] = this.parseArgValue();
       if (this.at(Tk.Punct, Pn.Comma)) this.next();
@@ -600,6 +607,7 @@ export class Parser extends Grammar {
     const out: { [key: string]: Expr } = {};
     while (!this.at(Tk.Punct, Pn.ParenR)) {
       const key = this.eat(Tk.Ident).v;
+      this.nestGuard(key);
       this.eat(Tk.Punct, Pn.Colon);
       out[key] = this.parseExpr();
       if (this.at(Tk.Punct, Pn.Comma)) this.next();
@@ -616,6 +624,7 @@ export class Parser extends Grammar {
     const out: { [name: string]: string | Interp } = {};
     while (!this.at(Tk.Punct, Pn.ParenR)) {
       const key = this.eat(Tk.Ident).v;
+      this.nestGuard(key);
       this.eat(Tk.Punct, Pn.Colon);
       const t = this.eat(Tk.String);
       out[key] = this.parseInterpolation(t.v, t.pos + 1);
