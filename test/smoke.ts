@@ -58,6 +58,7 @@ function makeEl(tag) {
     remove() { detach(this); },
     replaceChildren(...nodes) { for (const c of this.children.slice()) detach(c); for (const n of nodes) this.appendChild(n); },
     addEventListener(t, fn) { this.handlers[t] = fn; },
+    setAttribute(k, v) { this[k] = v; },   // a11y codegen sets aria-* via setAttribute
     createTHead() { const h = makeEl('thead'); this.appendChild(h); return h; },
     createTBody() { const b = makeEl('tbody'); this.appendChild(b); return b; },
     insertRow() { const r = makeEl('tr'); this.appendChild(r); return r; },

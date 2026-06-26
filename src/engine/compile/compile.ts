@@ -80,6 +80,14 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
       if (expr.kind === Ek.Lit) lines.push(`el_${id}.setAttribute(${JSON.stringify(attr)}, String(${val}));`);
       else lines.push(`effect(() => el_${id}.setAttribute(${JSON.stringify(attr)}, String(${val})));`);
     }
+    // style(name: "..") → CSS custom property `--name`, reactive when the value interpolates state. Bounded to
+    // CSS variables only (muten prepends `--`), so it never competes with class()/Tailwind; CSS reads var(--name).
+    for (const [name, sv] of Object.entries(p.styleVars || {})) {
+      const prop = JSON.stringify('--' + name.replace(/^-+/, ''));
+      if (typeof sv === 'string') { lines.push(`el_${id}.style.setProperty(${prop}, ${JSON.stringify(sv)});`); continue; }
+      const js = sv.parts.map((pt) => typeof pt === 'string' ? JSON.stringify(pt) : `String(${logic.compileExpr(pt, pageScope)})`).join(' + ');
+      lines.push(`effect(() => el_${id}.style.setProperty(${prop}, ${js}));`);
+    }
   };
 
   const genChildren = (id: string, parentVar: string): void => {
@@ -187,7 +195,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`}`);
 
         // Keyed reconciliation (same engine as `each`): rows matched by id, reused/moved/disposed, never a full rebuild.
-        lines.push(`function base_${id}() { return ${dataExpr}${staticExpr}; }`);
+        lines.push(`function base_${id}() { const __l = ${dataExpr}; return (Array.isArray(__l) ? __l : [])${staticExpr}; }`);   // fail-closed: a non-array never crashes the table
         lines.push(`const start_${id} = document.createComment('rows');`);
         lines.push(`const anchor_${id} = document.createComment('/rows');`);
         lines.push(`body_${id}.appendChild(start_${id}); body_${id}.appendChild(anchor_${id});`);
@@ -270,7 +278,9 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
           if (!fv.c && fv.kind !== Fk.Email) continue; // email always validates its format; others only if they carry a constraint
           const err = `err_${fv.var}`, val = `String(__d[${JSON.stringify(fv.name)}] ?? '')`;
           vChecks.push(`${err}.textContent = '';`);
-          if (fv.c?.required) vChecks.push(`if (!${val}.trim()) { ${err}.textContent = 'Required'; __ok = false; }`);
+          if (fv.c?.required) vChecks.push(fv.kind === Fk.Bool
+            ? `if (!__d[${JSON.stringify(fv.name)}]) { ${err}.textContent = 'Required'; __ok = false; }`   // a required checkbox must be CHECKED (String(false) is truthy — the old guard let it through)
+            : `if (!${val}.trim()) { ${err}.textContent = 'Required'; __ok = false; }`);
           // email type now ACTUALLY validates format (was cosmetic): a non-empty value must look like an email.
           if (fv.kind === Fk.Email) vChecks.push(`if (${val} && !/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(${val})) { ${err}.textContent = 'Enter a valid email'; __ok = false; }`);
           // `pattern:"<regex>"`: a non-empty value must match the author's regex (phone / zip / SKU / …).
@@ -294,11 +304,11 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         // reflect the draft back into fields so `draft.reset()` clears the form for free.
         // The value-changed guard avoids yanking the caret of the field being typed.
         lines.push(`effect(() => {`);
-        lines.push(`  const d = ${sig}.get();`);
+        lines.push(`  const __d = ${sig}.get();`);   // __d (reserved prefix) so it never collides with a state literally named `d`
         for (const fv of fieldVars) {
-          if (fv.kind === Fk.Bool) { lines.push(`  { const v = !!d[${JSON.stringify(fv.name)}]; if (${fv.var}.checked !== v) ${fv.var}.checked = v; }`); continue; }
+          if (fv.kind === Fk.Bool) { lines.push(`  { const v = !!__d[${JSON.stringify(fv.name)}]; if (${fv.var}.checked !== v) ${fv.var}.checked = v; }`); continue; }
           const def = fv.kind === Fk.Enum ? JSON.stringify(fv.options[0]) : `''`;
-          lines.push(`  { const v = d[${JSON.stringify(fv.name)}] ?? ${def}; if (${fv.var}.value !== v) ${fv.var}.value = v; }`);
+          lines.push(`  { const v = __d[${JSON.stringify(fv.name)}] ?? ${def}; if (${fv.var}.value !== v) ${fv.var}.value = v; }`);
         }
         lines.push(`});`);
         lines.push(`${parentVar}.appendChild(el_${id});`);
@@ -383,7 +393,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`onCleanup(() => { for (const __e of map_${id}.values()) __e.dispose(); map_${id}.clear(); });   // parent unmount: tear down every row (no leaked effects)`);
         lines.push(`let order_${id} = [];`);
         lines.push(`effect(() => {`);
-        lines.push(`  const __rows = (${listJS} ?? [])${filterJS ? `.filter((${p.as}) => ${filterJS})` : ''};`);
+        lines.push(`  const __l = ${listJS}; const __rows = (Array.isArray(__l) ? __l : [])${filterJS ? `.filter((${p.as}) => ${filterJS})` : ''};`);   // fail-closed: a non-array never crashes the loop (renders empty)
         lines.push(`  const __seen = new Set(); const __next = [];`);
         lines.push(`  for (const __row of __rows) {`);
         lines.push(`    const __k = __row?.id ?? __row; __seen.add(__k);   // key by id (entities) or the value itself (scalars), never index`);
@@ -405,7 +415,10 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         lines.push(`${parentVar}.appendChild(el_${id});`);
         const ins = Object.entries(p.inputs || {}).map(([k, v]) => `${JSON.stringify(k)}: ${customValue(v)}`).join(', ');
         const ons = Object.entries(p.on || {}).map(([ev, act]) => `${JSON.stringify(ev)}: (...__a) => ${logic.actionRef(typeof act === 'string' ? act : '')}(...__a)`).join(', ');
-        lines.push(`if (typeof __custom_${p.component} === 'function') __custom_${p.component}(el_${id}, { ${ins} }, { ${ons} });`);
+        // reactive inputs: if mount returns an updater fn, re-call it whenever a bound @state changes (the
+        // effect only re-runs when an input actually reads a signal). A mount that returns nothing stays a
+        // mount-time snapshot — backward compatible.
+        lines.push(`if (typeof __custom_${p.component} === 'function') { const __u${id} = __custom_${p.component}(el_${id}, { ${ins} }, { ${ons} }); if (typeof __u${id} === 'function') effect(() => __u${id}({ ${ins} })); }`);
         break;
       }
 
@@ -464,6 +477,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
       if (reactiveType.has(n.type)) return false;
       if (reactiveProp.some((k) => p[k] !== undefined)) return false;
       if ((p.class || []).some((c) => typeof c !== 'string')) return false; // reactive class toggle -> not static
+      if ((p.aria && Object.keys(p.aria).length) || (p.styleVars && Object.keys(p.styleVars).length)) return false; // aria()/style() write attrs/CSS-vars at runtime via genDynamics -> the static HTML path would silently drop them
       if (interpKeys.some((k) => { const v = p[k]; return !!v && typeof v === 'object' && 'kind' in v && v.kind === Ek.Interp; })) return false;
     }
     return true;

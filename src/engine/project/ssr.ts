@@ -8,7 +8,7 @@ import { sourceRequest, sourceRows } from '#engine/shared/source.js';
 
 const VOID = new Set(['img', 'input', 'br', 'hr', 'meta', 'link', 'source']);
 
-const escText = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escText = (s: string): string => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); // coerce: a DataTable number/bool cell sets textContent to a non-string
 const escAttr = (s: string): string => escText(s).replace(/"/g, '&quot;');
 
 class SNode {
@@ -31,6 +31,7 @@ class SElement extends SNode {
   className = '';
   // element properties the generated code assigns directly; serialized as attributes
   src = ''; alt = ''; href = ''; type = ''; value = ''; placeholder = '';
+  style = { setProperty(_name: string, _val: string): void { /* SSR is structure-only; a `style(--v)` CSS var doesn't change serialized HTML */ } };
   private text = '';
   constructor(public tag: string) { super(); }
 

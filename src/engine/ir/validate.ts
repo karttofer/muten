@@ -89,6 +89,7 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       // a query's data is always an array: a single-record type silently renders empty (no fetch-one).
       D.push(diag('query-not-list', `state "${name}" is a query but typed "${t}" — a query returns a LIST (the data is an array). Use \`list<${t}>\` and read it with \`each\`. (Single-record fetch isn't supported in muten.)`, { loc: def.loc, suggestion: `list<${t}>` }));
     }
+    if (def.refresh != null) D.push(diag('polling-unsupported', `state "${name}" uses \`every …\` polling, which isn't supported — it would compile to a query that never refreshes (a silent no-op). For live data use \`query … live\` (a WebSocket); for periodic refresh call \`refetch()\` from an action.`, { loc: def.loc }));
     if (t === 'list') {
       D.push(diag('untyped-list', `state "${name}" is an untyped "list" — declare the element type, e.g. list<uuid> or list<User>`, { loc: def.loc, suggestion: 'list<uuid>' }));
     } else if (t.startsWith('list<')) {
@@ -96,12 +97,29 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
       if (!SCALARS.includes(elem) && !entityNames.includes(elem)) {
         D.push(diag('unknown-type', `list element "${elem}" is not a known entity or scalar type`, { loc: def.loc, suggestion: closest(elem, [...entityNames, ...SCALARS]), from: elem }));
       }
+      // a list's initial must BE a list. `items = {} : list<X>` (the draft-seed slip) lints clean today and then
+      // crashes at runtime ("{} is not iterable"). Catch it: a given initial must be an array.
+      if (def.initial != null && !Array.isArray(def.initial)) {
+        D.push(diag('type-mismatch', `state "${name}" is a list, but its initial value is not a list — use \`[]\` (or a list of ${elem})`, { loc: def.loc, suggestion: '[]' }));
+      }
     } else if (def.initial !== undefined && def.initial !== null) {
       // a scalar state's initial value must match its declared type (e.g. `count = "" : number` is a bug)
       const want = t === 'number' ? 'number' : t === 'bool' ? 'boolean' : (['text', 'string', 'email', 'uuid'].includes(t) ? 'string' : '');
       if (want && typeof def.initial !== want) {
         D.push(diag('type-mismatch', `state "${name}" is typed "${t}" but its initial value is a ${typeof def.initial}`, { loc: def.loc }));
       }
+    }
+  }
+
+  // constraints apply to specific field kinds: a `pattern` on a number, or `min` on a bool, is a guard that
+  // silently does nothing — the author thinks they added validation. Reject the mismatch with the reason.
+  for (const [ent, fields] of Object.entries(doc.constraints || {})) {
+    const edef = (doc.entities?.[ent] || {}) as Record<string, string>;
+    for (const [field, c] of Object.entries(fields)) {
+      const ft = edef[field] || '', stringy = ft === 'string' || ft === 'email', kind = ft.startsWith('enum:') ? 'enum' : ft === 'string' ? 'text' : ft;
+      if (c.pattern != null && !stringy) D.push(diag('constraint-kind', `\`pattern\` on "${ent}.${field}" (a ${kind}) does nothing — \`pattern\` validates text/email fields only.`, { from: field }));
+      if ((c.min != null || c.max != null) && ft !== 'number' && !stringy) D.push(diag('constraint-kind', `\`min\`/\`max\` on "${ent}.${field}" (a ${kind}) does nothing — they bound a number's value or text's length only.`, { from: field }));
+      if (c.required && ft.startsWith('enum:')) D.push(diag('constraint-kind', `\`required\` on "${ent}.${field}" is redundant — an enum always has a value.`, { from: field }));
     }
   }
 
@@ -213,11 +231,22 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
         const norm = (t: string): string => (t === 'number' || t === 'bool') ? t : (t.startsWith('enum:') || ['text', 'string', 'email', 'uuid'].includes(t)) ? 'text' : t;
         const lt = exprType(e.left, scope), rt = exprType(e.right, scope);
         if (lt && rt && norm(lt) !== norm(rt)) D.push(diag('compare-type', `comparing a ${lt} to a ${rt} — they never match (always ${e.op === BOp.Neq ? 'true' : 'false'}). Likely a quoted number (\`== "1"\` vs \`== 1\`) or a type mismatch.`, { loc }));
+        // enum equality against a NON-member is always false — a typo'd status/stage (incl. a `match` arm value) that silently never matches.
+        if ((e.op === BOp.Eq || e.op === BOp.Neq)) {
+          const et = lt.startsWith('enum:') ? lt : rt.startsWith('enum:') ? rt : '';
+          const litV = e.right.kind === Ek.Lit && typeof e.right.value === 'string' ? e.right.value : (e.left.kind === Ek.Lit && typeof e.left.value === 'string' ? e.left.value : null);
+          if (et && litV != null) { const members = et.slice(5).split('|'); if (!members.includes(litV)) D.push(diag('enum-member', `"${litV}" is not a value of this enum (${members.join(' | ')}) — \`${e.op === BOp.Neq ? '!=' : '=='}\` is always ${e.op === BOp.Neq ? 'true' : 'false'}. (a \`match\` arm value must be one of the enum's values.)`, { loc, suggestion: closest(litV, members), from: litV })); }
+        }
       }
       if (e.op === BOp.Contains) { // `list<Entity> contains <scalar>` -> array.includes(object) is ALWAYS false
         const lt = exprType(e.left, scope);
         const elem = lt.startsWith('list<') ? lt.slice(5, -1) : '';
         if (elem && doc.entities?.[elem]) D.push(diag('contains-entity', `\`contains\` on a list of "${elem}" objects checks object identity, not a field — it is always false. Use a \`list<scalar>\` (e.g. list<text>), or filter a field with \`each … where field == x\`.`, { loc }));
+        else if (elem) { // a scalar list: the searched value's type must match the element type, else `includes` is always false
+          const norm = (t: string): string => (t === 'number' || t === 'bool') ? t : (t.startsWith('enum:') || ['text', 'string', 'email', 'uuid'].includes(t)) ? 'text' : t;
+          const rt = exprType(e.right, scope);
+          if (rt && norm(elem) !== norm(rt)) D.push(diag('contains-type', `\`contains\` searches a list of ${elem}, but the value is a ${rt} — it never matches (always false).`, { loc }));
+        }
       }
       checkArith(e.left, loc, scope); checkArith(e.right, loc, scope);
     } else if (e.kind === Ek.Un) checkArith(e.operand, loc, scope);
@@ -366,6 +395,9 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     if (n.type === 'DataTable') { // columns + where fields must be real fields of the row entity (else blank column / dead filter / @ref crash)
       const d = String(props.data ?? '').replace(/^@/, '');
       const dt = doc.state?.[d]?.type || '';
+      // the data must be a LIST — a scalar/record here lints clean today, then crashes at runtime ("not iterable").
+      if (d && d in (doc.state || {}) && dt !== 'list' && !dt.startsWith('list<'))
+        D.push(diag('datatable-not-list', `DataTable shows a list, but "${d}" is "${dt}" (not a list) — bind a \`list<…>\` state or a query.`, { loc: n.loc, from: d }));
       const elem = dt.startsWith('list<') ? dt.slice(5, -1) : '';
       const rowFields = entityFieldSet(elem);
       if (rowFields) {
@@ -391,12 +423,25 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     if (n.type === Nt.Icon && typeof props.name === 'string' && (props.name.includes('{') || !props.name.includes(':')))
       D.push(diag('icon-name', `Icon "${props.name}" must be a static "set:name" literal (e.g. \`Icon "lucide:settings"\`) — icons inline at build, so the name can't be dynamic/interpolated. For a per-row icon, branch over static Icons with \`when\`/\`match\` (or a \`part\` per icon).`, { loc: n.loc, from: props.name }));
     // expression references: when condition, each list, reactive Text/Image interpolation
-    if (n.type === Nt.When && props.cond) checkExpr(props.cond, n.loc ?? null, scope);
-    if (n.type === Nt.Each && props.list) checkExpr(props.list, n.loc ?? null, scope);
+    if (n.type === Nt.When && props.cond) {
+      checkExpr(props.cond, n.loc ?? null, scope);
+      // `when <list>` is ALWAYS truthy (an empty array is truthy) — the obvious reading ("if it has items") is wrong.
+      if (props.cond.kind === Ek.Ref) { const ct = (doc.state || {})[props.cond.name]?.type; if (ct && (ct === 'list' || ct.startsWith('list<'))) D.push(diag('when-list', `\`when ${props.cond.name}\` tests a list, which is ALWAYS truthy (even when empty). Use \`when ${props.cond.name}.length > 0\` to render only when it has items.`, { loc: n.loc, suggestion: `${props.cond.name}.length > 0`, from: props.cond.name })); }
+    }
+    if (n.type === Nt.Each && props.list) {
+      checkExpr(props.list, n.loc ?? null, scope);
+      // the iterated head must be a LIST — a scalar/record state here lints clean and then crashes at runtime
+      // ("not iterable"). Catch the common case: a bare ref to a non-list page state.
+      if (props.list.kind === Ek.Ref) {
+        const lt = (doc.state || {})[props.list.name]?.type;
+        if (lt && lt !== 'list' && !lt.startsWith('list<')) D.push(diag('each-not-list', `each iterates a list, but "${props.list.name}" is "${lt}" — use a \`list<…>\` state (or a query/list)`, { loc: n.loc, from: props.list.name }));
+      }
+    }
     if (props.arg && typeof props.arg === 'object' && 'kind' in props.arg) checkExpr(props.arg as Expr, n.loc ?? null, scope); // `-> action(arg)` on Button/Link/RowAction: arg was previously unchecked
     if (props.argRest) for (const a of props.argRest) checkExpr(a, n.loc ?? null, scope);                                     // 2nd+ args of a multi-arg call `-> f(a, b)`
     if (Array.isArray(props.class)) for (const c of props.class) if (typeof c !== 'string' && c.cond) checkExpr(c.cond, n.loc ?? null, scope); // reactive `class(x when cond)`: the cond was unchecked → a stale state ref (e.g. a renamed state) passed lint but shipped a runtime ReferenceError
     if (props.aria) for (const expr of Object.values(props.aria)) checkExpr(expr, n.loc ?? null, scope);  // `aria(key: expr)` values are real expressions: an unknown/renamed state ref is caught here, not at runtime
+    if (props.styleVars) for (const sv of Object.values(props.styleVars)) if (typeof sv !== 'string') for (const pt of sv.parts) if (typeof pt !== 'string') checkExpr(pt, n.loc ?? null, scope);  // `style(w: "{ref}")` interpolations: an unknown state ref is caught here, not at runtime
     const interps: StringPropValue[] = [];
     if ((n.type === Nt.Text || n.type === Nt.Title || n.type === Nt.Span) && props.value) interps.push(props.value);
     if (n.type === Nt.Image) { if (props.src) interps.push(props.src); if (props.alt) interps.push(props.alt); }
@@ -427,29 +472,30 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
   // a page (has `screen`) needs one root node; a parts/app/empty file has no screen and no page root.
   else if (ctx.kind !== 'store' && doc.screen) D.push(diag('no-root', `page "${doc.screen}" has no root node: a page needs one top-level node, e.g. Page { ... }`));
 
-  // `get` is a derived value (computed signal), valid on a page and in a .store alike.
-  // `effect` is store-only: a page reacts through `when`/`each`, not side-effects.
-  if (ctx.kind !== 'store') {
-    for (const expr of Object.values(doc.gets || {})) checkExpr(expr, null, new Map()); // every page get resolves against page state
-    if ((doc.effects || []).length) D.push(diag('store-only', '`effect { }` is only valid in a .store — a page reacts through `when`/`each`, not effects.'));
+  // `get` (a derived/computed value) and `effect` (a side-effect that runs on mount and re-runs on its reactive
+  // deps) are valid on a PAGE and in a .store alike. Every expression resolves against this file's own state, so
+  // a member typo / bad ref in a `get` or `effect {}` is caught here, never shipped as a runtime ReferenceError.
+  // (Page effects are the home for on-mount side effects — initializing a 3rd-party SDK, analytics, focus.)
+  for (const expr of Object.values(doc.gets || {})) checkExpr(expr, null, new Map());
+  // gets must not form a cycle: a self/mutual reference compiles to `const g = computed(() => g.get()…)`,
+  // a "cannot access 'g' before initialization" crash. Catch it (DFS over the get→get dependency graph).
+  {
+    const gdeps: { [g: string]: string[] } = {};
+    for (const [g, e] of Object.entries(doc.gets || {})) gdeps[g] = collectRefs(e).map((r) => r.split('.')[0]).filter((h) => h in (doc.gets || {}));
+    const onPath = (g: string, seen: Set<string>): boolean => seen.has(g) ? true : (seen.add(g), (gdeps[g] || []).some((d) => onPath(d, new Set(seen))));
+    for (const g of Object.keys(doc.gets || {})) if (onPath(g, new Set())) { D.push(diag('get-cycle', `get "${g}" depends on itself (directly or via another get) — that compiles to a "cannot access before initialization" crash. A get can't reference itself.`, { from: g })); break; }
   }
-
-  // store gets + effects: every expression resolves against the slice's own state (was head-only before,
-  // so member typos and bad refs in `effect {}` shipped silently as runtime ReferenceErrors).
-  if (ctx.kind === 'store') {
-    for (const expr of Object.values(doc.gets || {})) checkExpr(expr, null, new Map());
-    const checkEff = (st: Stmt): void => {
-      if (st.op === StOp.If) { checkExpr(st.cond, null, new Map()); for (const s of (st.then || [])) checkEff(s); for (const s of (st.else || [])) checkEff(s); return; }
-      if ('target' in st && st.target && !stateKeys.has(st.target)) D.push(diag('undeclared-mutation', `effect mutates "${st.target}" — not a state of this store`, { suggestion: closest(st.target, [...stateKeys]), from: st.target })); // target was previously unchecked: a typo shipped a runtime ReferenceError
-      if (st.op === StOp.Remove) checkExpr(st.pred, null, itemPredScope(new Map(), st.target));
-      else if (st.op === StOp.Patch) { const inner = itemPredScope(new Map(), st.target); checkExpr(st.pred, null, inner); checkExpr(st.patch, null, inner); }
-      else if (st.op === StOp.Refetch) { for (const v of Object.values(st.params)) checkExpr(v, null, new Map()); }
-      else if (st.op === StOp.Request) { if (st.body) checkExpr(st.body, null, new Map()); }
-      else if (st.op === StOp.Extern) { if (!externs.has(st.fn)) D.push(diag('unknown-function', `"${st.fn}" is not a use'd function`, { suggestion: closest(st.fn, [...externs]), from: st.fn })); for (const a of st.args) checkExpr(a, null, new Map()); }
-      else if ('arg' in st && st.arg) checkExpr(st.arg, null, new Map());
-    };
-    for (const eff of doc.effects || []) for (const st of eff) checkEff(st);
-  }
+  const checkEff = (st: Stmt): void => {
+    if (st.op === StOp.If) { checkExpr(st.cond, null, new Map()); for (const s of (st.then || [])) checkEff(s); for (const s of (st.else || [])) checkEff(s); return; }
+    if ('target' in st && st.target && !stateKeys.has(st.target)) D.push(diag('undeclared-mutation', `effect mutates "${st.target}" — not a declared state`, { suggestion: closest(st.target, [...stateKeys]), from: st.target }));
+    if (st.op === StOp.Remove) checkExpr(st.pred, null, itemPredScope(new Map(), st.target));
+    else if (st.op === StOp.Patch) { const inner = itemPredScope(new Map(), st.target); checkExpr(st.pred, null, inner); checkExpr(st.patch, null, inner); }
+    else if (st.op === StOp.Refetch) { for (const v of Object.values(st.params)) checkExpr(v, null, new Map()); }
+    else if (st.op === StOp.Request) { if (st.body) checkExpr(st.body, null, new Map()); }
+    else if (st.op === StOp.Extern) { if (!externs.has(st.fn)) D.push(diag('unknown-function', `"${st.fn}" is not a use'd function`, { suggestion: closest(st.fn, [...externs]), from: st.fn })); for (const a of st.args) checkExpr(a, null, new Map()); }
+    else if ('arg' in st && st.arg) checkExpr(st.arg, null, new Map());
+  };
+  for (const eff of doc.effects || []) for (const st of eff) checkEff(st);
 
   // actions: a body may only mutate what `mutates` declares, using known ops
   for (const [name, a] of Object.entries(doc.actions || {})) {

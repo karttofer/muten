@@ -31,18 +31,19 @@ export function composeDoc(ir: IR, parts: Parts): { doc: Doc; used: string[] } {
   return { doc: toDoc({ ...ir, entities, state, tree }), used };
 }
 
-function composeNode(node: IRNode, parts: Parts, used: Set<string>): IRNode {
+function composeNode(node: IRNode, parts: Parts, used: Set<string>, chain: Set<string> = new Set()): IRNode {
   const part = parts[node.type];
   if (part) {                                          // it's a part instance
+    if (chain.has(node.type)) throw new Error(`part "${node.type}" references itself (directly or through another part) — parts inline at build, so a cycle can never terminate. Remove the self-reference.`);
     used.add(node.type);
     const inlined = substitute(part.tree, node.args || {});
-    return composeNode(inlined, parts, used);          // resolve nested parts
+    return composeNode(inlined, parts, used, new Set([...chain, node.type]));   // resolve nested parts; track the expansion chain to catch recursion
   }
   const out: IRNode = { type: node.type };
   if (node.loc) out.loc = node.loc;   // page's own nodes keep their source position
   if (node.args) out.args = node.args; // unresolved part instance (typo): validate flags it unknown-part
   if (node.props) out.props = node.props;
-  if (node.children) out.children = node.children.map((c) => composeNode(c, parts, used));
+  if (node.children) out.children = node.children.map((c) => composeNode(c, parts, used, chain));
   return out;
 }
 
@@ -76,6 +77,8 @@ function subProps(props: NodeProps, args: ArgMap): NodeProps {
   if (props.to !== undefined) out.to = typeof props.to === 'string' ? props.to : subInterp(props.to, args);
   if (props.inputs !== undefined) out.inputs = subArgs(props.inputs, args);
   if (props.on !== undefined) out.on = subArgs(props.on, args);
+  if (props.styleVars !== undefined) out.styleVars = Object.fromEntries(Object.entries(props.styleVars).map(([k, v]) => [k, typeof v === 'string' ? v : subInterp(v, args)])); // `style(w: "{$pct}")` in a part: sub the param
+  if (props.aria !== undefined) out.aria = Object.fromEntries(Object.entries(props.aria).map(([k, e]) => [k, subExpr(e, args)]));                                          // `aria(label: $lbl)` in a part: sub the param
   return out;
 }
 

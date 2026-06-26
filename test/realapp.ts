@@ -59,6 +59,7 @@ function makeEl(tag: string): any {
     remove() { detach(this); },
     replaceChildren(...nodes: any[]) { for (const c of this.children.slice()) detach(c); for (const n of nodes) this.appendChild(n); },
     addEventListener(t: string, fn: any) { this.handlers[t] = fn; },
+    setAttribute(k: string, v: any) { this[k] = v; },   // a11y codegen sets aria-* via setAttribute
   };
   registry.push(el);
   return el;

@@ -88,5 +88,5 @@ export enum StOp { Push = 'push', Set = 'set', Reset = 'reset', Toggle = 'toggle
 /** Node modifiers (post-primitive). */
 export enum Mod {
   Bind = 'bind', Submit = 'submit', Where = 'where', Columns = 'columns',
-  Class = 'class', Alt = 'alt', Inputs = 'inputs', On = 'on', Aria = 'aria',
+  Class = 'class', Alt = 'alt', Inputs = 'inputs', On = 'on', Aria = 'aria', Style = 'style',
 }

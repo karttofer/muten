@@ -59,8 +59,10 @@ all three *by construction* - these are properties of how it compiles, not marke
   the JS the big frameworks do, and a static page ships *zero*. (See the size table in *muten vs React / Vue /
   Svelte* below.)
 - **A deterministic oracle**: `muten check --json` validates every page at compile time (unknown
-  state/action/part, bad style token, illegal mutation) in milliseconds, no browser - a feedback loop the
-  others don't have. A *bounded* language is what makes that possible.
+  state/action/part, bad style token, illegal mutation, a non-list fed to `each`/`DataTable`, a self-referential
+  `get`, a constraint on the wrong field kind, a `match` arm outside its enum, `when <list>` that's always
+  truthy, `every Ns` polling that never runs) in milliseconds, no browser - a feedback loop the others don't
+  have. A *bounded* language is what makes that possible.
 - **The whole app as data**: `app.map.json` is a compact index of routes + structure an agent reads first,
   instead of grepping a component tree.
 - **Small edit radius**: the UI is declarative, so a change is usually a few lines in one file.
@@ -236,7 +238,9 @@ file-level conventions (≤500 lines, honest types, data-table dispatch, no magi
 
 muten imposes no theme. There is ONE way to style: `class("…")` (your CSS / Tailwind / anything) carries both
 layout and look. `theme.muten` holds the design values and muten emits them as `:root` CSS custom properties
-(`--space-md`, `--color-primary`, ...) that your CSS / `class()` consumes. For behavior the primitives can't
+(`--space-md`, `--color-primary`, ...) that your CSS / `class()` consumes. For a CSS value that **changes at
+runtime** (a progress width, a dynamic transform), `style(w: "{pct}%")` binds it to state via a CSS variable
+`--w` (the only thing `style()` can set — never an arbitrary property). For behavior the primitives can't
 express, drop to a `Custom` component (`src/components/<Name>.js`).
 
 ## Status & roadmap (honest)

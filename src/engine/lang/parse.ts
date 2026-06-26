@@ -56,6 +56,7 @@ export class Parser extends Grammar {
       [Mod.Inputs, (props: NodeProps) => { props.inputs = { ...props.inputs, ...this.parseArgs() }; }],   // Custom inputs(k: value, ...)
       [Mod.On, (props: NodeProps) => { props.on = { ...props.on, ...this.parseArgs() }; }],               // Custom on(event: action, ...)
       [Mod.Aria, (props: NodeProps) => { props.aria = { ...props.aria, ...this.parseAriaArgs() }; }],      // aria(label: "Close", expanded: isOpen) -> aria-*/role
+      [Mod.Style, (props: NodeProps) => { props.styleVars = { ...props.styleVars, ...this.parseStyleArgs() }; }], // style(w: "{pct}%") -> CSS var --w (the bounded path for dynamic values: progress, transforms)
     ]);
 
     this.statements = new Map([
@@ -436,7 +437,7 @@ export class Parser extends Grammar {
     while (reading) {
       const tok = this.peek();
       switch (tok.t) {
-        case Tk.String: { const key = STRING_PROP[type] || 'label'; const t = this.next(); props[key] = INTERPOLATES.has(type) ? this.parseInterpolation(t.v, t.pos + 1) : t.v; break; }
+        case Tk.String: { const key = STRING_PROP[type] || 'label'; if (props[key] !== undefined) { reading = false; break; } const t = this.next(); props[key] = INTERPOLATES.has(type) ? this.parseInterpolation(t.v, t.pos + 1) : t.v; break; } // a 2nd positional string is NOT a prop — it's the next sibling (e.g. the next `match` arm with a quoted value)
         case Tk.Param: { const key = STRING_PROP[type] || 'label'; props[key] = { $param: this.next().v }; break; } // part param standing in for the string
         case Tk.Ref: props.data = this.next().v; break;                            // positional @ref = data (DataTable @rows)
         case Tk.Arrow: this.parseArrow(type, props); break;                        // -> "/route" (Link) or -> action(arg)
@@ -444,8 +445,6 @@ export class Parser extends Grammar {
           const word = tok.v;
           if (type === Nt.Title && isLevel(word)) { this.next(); props.level = word; break; } // heading level (h1..h6)
           if (type === Nt.Video && VIDEO_FLAGS.has(word)) { this.next(); (props.flags = props.flags || []).push(word); break; } // <video> boolean attr
-          if (word === 'style' && this.toks[this.pos + 1]?.v === Pn.ParenL)         // `style(...)` was removed; point the AI at the one styling path
-            throw new ParseError('`style(...)` was removed — style with `class(...)` instead (Tailwind utilities, or your own CSS backed by theme.muten CSS vars).', this.locOf(tok.pos));
           const applyModifier = this.modifiers.get(word);                          // table keys are the valid modifiers
           if (!applyModifier) { reading = false; break; }                          // unknown ident starts a sibling node
           this.next();
@@ -597,6 +596,23 @@ export class Parser extends Grammar {
       const key = this.eat(Tk.Ident).v;
       this.eat(Tk.Punct, Pn.Colon);
       out[key] = this.parseExpr();
+      if (this.at(Tk.Punct, Pn.Comma)) this.next();
+    }
+    this.eat(Tk.Punct, Pn.ParenR);
+    return out;
+  }
+
+  // style(name: "value") — each key becomes a CSS custom property `--name`; the value is an interpolated string
+  // (e.g. "{pct}%", "translateX({x}px)"). Only CSS variables: muten prepends `--`, so it can't set an arbitrary
+  // property and compete with class()/Tailwind. The CSS reads it with `var(--name)`. Reactive when interpolated.
+  private parseStyleArgs(): { [name: string]: string | Interp } {
+    this.eat(Tk.Punct, Pn.ParenL);
+    const out: { [name: string]: string | Interp } = {};
+    while (!this.at(Tk.Punct, Pn.ParenR)) {
+      const key = this.eat(Tk.Ident).v;
+      this.eat(Tk.Punct, Pn.Colon);
+      const t = this.eat(Tk.String);
+      out[key] = this.parseInterpolation(t.v, t.pos + 1);
       if (this.at(Tk.Punct, Pn.Comma)) this.next();
     }
     this.eat(Tk.Punct, Pn.ParenR);

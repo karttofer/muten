@@ -96,8 +96,8 @@ export class Logic {
       if (rest[0] === 'loading' || rest[0] === 'error' || rest[0] === 'data') return `${head}.get()${tail}`; // .loading/.error/.data are the signal's own fields, no double .data
       return `${head}.get().data${tail}`;                 // @users -> data array; @users.length -> its length
     }
-    if (this.ctx.stateKeys.has(head)) return `${head}.get()` + tail;
-    if (this.ctx.gets[head] !== undefined) return `${head}.get()` + tail; // `get` is a computed signal, read like state
+    if (this.ctx.stateKeys.has(head)) return `${head}.get()` + (rest.length ? '?.' + rest.join('?.') : ''); // optional-chain nested entity access: `{o.inner.name}` on `o = {} : Entity` must not throw on the empty record
+    if (this.ctx.gets[head] !== undefined) return `${head}.get()` + (rest.length ? '?.' + rest.join('?.') : ''); // `get` is a computed signal, read like state
     if (this.ctx.stores[head]) {
       const member = rest[0];
       const more = rest.length > 1 ? '.' + rest.slice(1).join('.') : '';

@@ -254,6 +254,7 @@ export interface NodeProps {
   inputs?: ArgMap;
   on?: ArgMap;
   aria?: { [key: string]: Expr };   // aria(label: "Close", expanded: isOpen) → aria-*/role attrs; reactive when the value reads state
+  styleVars?: { [name: string]: string | Interp };   // style(w: "{pct}%") → sets CSS custom property `--w` (reactive when interpolated); CSS reads it via var(--w)
   // control flow (When/Each)
   cond?: Expr;
   list?: Expr;

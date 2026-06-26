@@ -27,6 +27,7 @@ function makeEl(tag) {
     appendChild(c) { this.children.push(c); return c; },
     addEventListener(t, fn) { this.handlers[t] = fn; },
     replaceChildren(...n) { this.children = n; },
+    setAttribute(k, v) { this[k] = v; },   // a11y codegen sets aria-* via setAttribute
   };
   reg.push(el); return el;
 }
