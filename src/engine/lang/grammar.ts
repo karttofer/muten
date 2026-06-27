@@ -164,6 +164,14 @@ export class Grammar {
     const dot = name.lastIndexOf('.');
     const op = dot === -1 ? '' : name.slice(dot + 1);
     const isAgg = AGG_OPS.has(op) || SORT_OPS.has(op);
+    // `list.take(n)` -> the first n items (top-N lists, "load more" pagination). Returns a list, so it reads
+    // like `sort` downstream (element type preserved), but takes a parenthesized count, not `by`/`where`.
+    if (op === 'take' && this.at(Tk.Punct, Pn.ParenL)) {
+      this.next();
+      const n = this.parseExpr();
+      this.eat(Tk.Punct, Pn.ParenR);
+      return { kind: Ek.Agg, op: 'take', list: name.slice(0, dot), body: n };
+    }
     // Lambda-free aggregate: `lines.sum by price * qty` (projection) or
     // `tasks.count where not done` (predicate). Item fields are read bare (item-implicit).
     if (isAgg && (this.at(Tk.Ident, Kw.By) || this.at(Tk.Ident, Kw.Where))) {

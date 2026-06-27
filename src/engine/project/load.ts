@@ -8,9 +8,24 @@ import { join, dirname, basename } from 'node:path';
 import { parse } from '#engine/lang/parse.js';
 import { resolveStyles } from '#engine/project/styles.js';
 import { composeDoc } from '#engine/ir/compose.js';
-import type { PartDef, Value, LoadResult, IR } from '#engine/shared/types.js';
+import type { PartDef, Value, LoadResult, IR, Entity } from '#engine/shared/types.js';
 
 type Parts = { [name: string]: PartDef };
+
+// Element entity of each store's list-typed STATE member, keyed "domain.member" — so a PAGE doing a
+// cross-store aggregate (`orders.items.count where status == …`) can resolve the element's fields the
+// same way it resolves a local list. (State members only; a get returning a list is left to local resolution.)
+export function storeListEntities(stores: { [domain: string]: IR }): { [k: string]: Entity } {
+  const out: { [k: string]: Entity } = {};
+  for (const [domain, ir] of Object.entries(stores)) {
+    for (const [member, def] of Object.entries(ir.state || {})) {
+      const m = (def.type || '').match(/^list<(.+)>$/);
+      const ent = m ? ir.entities?.[m[1]] : undefined;
+      if (ent) out[`${domain}.${member}`] = ent;
+    }
+  }
+  return out;
+}
 
 // Every *.store file under a directory -> parsed IR keyed by domain name.
 // Shared by the Vite plugin, the linter, and `muten map` so store refs resolve everywhere.

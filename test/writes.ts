@@ -3,7 +3,7 @@
 // here we lock the generated shape — method, url (/:id), body, error handling, and the list mutation.
 import { parse } from '#engine/lang/parse.js';
 import { toDoc } from '#engine/ir/flatten.js';
-import { compileModule } from '#engine/compile/compile.js';
+import { compileModule, compileStore } from '#engine/compile/compile.js';
 
 let f = 0;
 const ok = (l, c, e = '') => { console.log((c ? '✓' : '✗') + ' ' + l + (c ? '' : '   ← ' + e)); if (!c) f++; };
@@ -71,6 +71,71 @@ ok('explicit delete + interpolated url', ejs.includes('await __send("shop:/order
 ok('explicit request → async (a write)', ejs.includes('async function buy(item)'));
 ok('pure command needs no mutates (.pending wired)', ejs.includes('__pending_buy'));
 ok('__send helper emitted', ejs.includes('function __send(url, method, body)'));
+
+// scalar-list toggle (membership): `favs.toggle(x)` adds x if absent, removes if present — the toggle-OFF
+// a scalar `remove where` can't express. (Unblocks favorites/subscribe; was add-only before.)
+const tjs = compileModule(toDoc(parse(`screen s
+state { favs = [] : list<text> }
+action fav(x: text) mutates favs { favs.toggle(x) }
+action openClose mutates open { open.toggle() }
+state { open = false : bool }
+Page { Button "f" -> fav("v1")  when favs contains "v1" { Text "on" } }`)));
+ok('scalar toggle: add-if-absent / remove-if-present', tjs.includes('__l.includes(__v) ? __l.filter((__e) => __e !== __v) : [...__l, __v]'));
+ok('bool toggle still flips', tjs.includes('open.set(!open.get());'));
+
+// page-level `effect {}` runs on mount: a local mutation AND a store-action call both compile into effect().
+const fjs = compileModule(toDoc(parse(`screen s
+state { current = "x" : text }
+effect { current.set("y") }
+effect { ui.setSection("home") }
+Page { Button "f" -> ui.setSection("a")  Text "c {current}" }`)));
+ok('page effect: local mutation emitted', fjs.includes('effect(() => {') && fjs.includes('current.set("y")'));
+ok('page effect: store-action call emitted', fjs.includes('__store_ui.setSection("home")'));
+ok('page effect: store imported from the effect', fjs.includes("import * as __store_ui from 'virtual:muten/store/ui'"));
+
+// post … into <state>: capture the JSON response (order id / confirmation code) into a local state.
+const ijs = compileModule(toDoc(parse(`screen e
+entity Receipt { code text }
+state { receipt = {} : Receipt }
+sources { receipt: { url: "/r" } }
+action pay <- cart { post "/checkout" body cart into receipt }
+Page { Text "{receipt.code}" }`)), {}, '', {}, {}, { api: {} });
+ok('post into → captures the response into the state', ijs.includes('receipt.set(await __send("/checkout", "POST", cart))'));
+ok('post-into action is async (awaits the response)', ijs.includes('async function pay(cart)'));
+const ibad = compileModule(toDoc(parse(`screen e
+state { x = "" : text }
+action pay <- c { post "/c" body c }
+Page { Button "go" -> pay(x)  Text "{x}" }`)), {}, '', {}, {}, { api: {} });
+ok('plain post (no into) does NOT capture a response', ibad.includes('__send("/c", "POST", c)') && !ibad.includes('.set(await __send') && !ibad.includes('.then((__r)'));
+
+// dynamic sort column: `sort by <text-state>` -> __it[state.get()] (user-chosen column); a literal field stays static.
+const djs = compileModule(toDoc(parse(`screen s
+entity Row { name text  price number }
+state { rows = [] : list<Row>  sortCol = "price" : text }
+get sorted = rows.sortDesc by sortCol
+Page { each sorted as r { Text "{r.name}" } }`)));
+ok('dynamic sort key reads __it[stateValue]', djs.includes('__it[sortCol.get()]'));
+const sjs2 = compileModule(toDoc(parse(`screen s
+entity Row { name text  price number }
+state { rows = [] : list<Row> }
+get sorted = rows.sortDesc by price
+Page { each sorted as r { Text "{r.name}" } }`)));
+ok('literal field sort stays static (__it.price)', sjs2.includes('__it.price') && !sjs2.includes('__it[price'));
+
+// persist keys are namespaced by SCOPE (store domain / page screen) so two stores with the same state name
+// (`items`) don't share one localStorage key — the silent cross-store data bleed found in the Pulse dashboard.
+const storeA = parse('state { items = [] : list<text> persist }');
+const sA = compileStore({ state: storeA.state, domain: 'orders' });
+const sB = compileStore({ state: storeA.state, domain: 'customers' });
+ok('store persist key namespaced by domain (orders)', sA.includes('"muten:orders:items"'));
+ok('store persist key namespaced by domain (customers)', sB.includes('"muten:customers:items"') && !sB.includes('"muten:items"'));
+const pPage = compileModule(toDoc(parse('screen home\nstate { draft = "" : text persist }\nPage { Text "{draft}" }')));
+ok('page persist key namespaced by screen', pPage.includes('"muten:home:draft"'));
+
+// `list.take(n)` -> the first n items (top-N / "load more" pagination). Returns a list of the same element.
+const tkjs = compileModule(toDoc(parse('screen s\nentity P { t text }\nstate { posts = [] : list<P>  limit = 3 : number }\nget top = posts.take(limit)\nPage { each posts.take(2) as p { Text "{p.t}" } }')));
+ok('take(n) literal compiles to slice(0, n)', tkjs.includes('.slice(0, 2)'));
+ok('take(state) compiles to slice(0, state.get())', tkjs.includes('.slice(0, limit.get())'));
 
 console.log(f ? `\n${f} FAILURE(S)` : '\nALL OK');
 process.exit(f ? 1 : 0);

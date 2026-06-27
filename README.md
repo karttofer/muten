@@ -99,7 +99,7 @@ that needs the full React ecosystem, and it doesn't pretend to be.
 |---|---|
 | **UI** | declarative primitives (layout, text, forms, tables, links) · `when`/`each` control flow · `class("…")` is the single styling path - layout AND look (reactive: `class(active when isOpen)`) · `on(event: action)` on any element · **`on(enter: action)`** synthetic event on inputs (fires only on Enter key - no Custom needed for Enter-to-submit): `SearchField bind(draft) on(enter: send)` |
 | **State** | local `state` · app-global `store` · derived `get` · `action`s with `if/else` · fine-grained signals. A page action can **call a store action** (`cart.add(d)  draft.reset()`): store + local work in one handler |
-| **Lists** | bounded ops, no raw `map`/`reduce`: inline objects (`push({…})`) · in-place `patch` · filtered `each…where` · aggregates `sum`/`count`/`avg`/`min`/`max` · `sort`/`sortDesc` |
+| **Lists** | bounded ops, no raw `map`/`reduce`: inline objects (`push({…})`) · in-place `patch` · filtered `each…where` · aggregates `sum`/`count`/`avg`/`min`/`max` · `sort`/`sortDesc` (by a literal field **or** a `text` state = user-chosen column) · `take(n)` pagination/top-N · `toggle(x)` add⇄remove (favorites/subscriptions) |
 | **Forms** | a `Form` auto-built from an entity, one input per field: `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select), with built-in validation |
 | **Data** | `query` states over `sources` (full HTTP: method, headers, body, nested `at`) · one `api` block (named multi-backend clients) · optimistic CRUD (`create`/`update`/`delete` + `.pending`/`.error`) · `refetch(q: …, page: …)` · **`query x live`** (WebSocket real-time: the server pushes, only changed rows re-render) · a `post`/`put`/`delete` escape for non-REST |
 | **Routing** | real-path URLs · params (`/product/:id` -> `param id`) · route guards · `/404` catch-all · route paths are **quoted strings**: `routes { "/" -> home  "/404" -> notfound }` · `Link "label" -> "/path"` · guard redirects `else "/login"` (bare paths no longer parse) |
@@ -134,15 +134,16 @@ Almost every "hard widget" lands at **tier 2**. The language stays small by desi
 crossing into a `Custom`, and the call site of a `use` function (an undeclared one is a `check` error). So
 coupling in chart.js or zod never costs you the oracle on the muten side.
 
-**Deploy - the honest caveat.** `muten build` (the CLI SSG) is **structure-only**: it emits plain HTML
-per route but omits non-layout token CSS, the project `styles.css`, and does not bundle `use` functions
-(they throw at runtime if the static build is served). For a styled, fully-runnable app use `vite build`.
-`npm run dev` runs every tier regardless - this only affects the production *build*.
+**Deploy - the honest caveat.** `muten build` (the CLI SSG) now **inlines the theme + project `styles.css`**
+and **pre-renders (SSR) your stores/`query` data**, so each route ships fully styled with real content. The two
+things a no-bundler static export can't do: bundle `use` functions (it **warns** and you switch to `vite build`),
+and persist store state across full-page navigations. For a styled, **stateful** app use `vite build`;
+`npm run dev` runs every tier regardless — these caveats only affect the production *static* build.
 
 | Your app uses... | Deploy with |
 |---|---|
-| Pure muten, static content only | `muten build` (zero-JS HTML) or `vite build` |
-| `use` JS functions, `Custom`, shared store, or any styling | **`vite build`** (bundles everything; the static build doesn't) |
+| Pure muten, static/content pages (styled, with data) | `muten build` (zero-JS HTML) or `vite build` |
+| `use` JS functions, `Custom`, or a shared store across pages | **`vite build`** (bundles `use` + keeps state across navigations) |
 
 **Most real apps use `vite build`.**
 
@@ -274,12 +275,11 @@ what keeps it small and analyzable; closing it would just make another general-p
 These are honest gaps found during stress-testing. They are known and tracked; none are design mistakes, just things not built yet.
 
 **Build tooling**
-- `muten build` (CLI SSG) is structure-only: it omits non-layout token CSS, the project `styles.css`, and does not bundle `use` functions (they throw). Use `npm run dev` for development and `vite build` for production in any real app.
+- `muten build` (CLI SSG) inlines the theme + project `styles.css` and SSRs your store/`query` data, but a no-bundler static export still can't bundle `use` functions (it warns) or persist store state across full-page navigations. Use `npm run dev` for development and `vite build` for a stateful production app.
 
 **Language features not yet available**
-- No `match`/`switch`: use N separate `when` blocks per enum value.
-- `sort by` takes a literal field name, not a variable.
 - `query x live` (WebSocket) requires the server to send an `id` per row for keyed diffing; without it, reconciliation falls back to full re-render.
+- An `Icon` name must be a static literal (it inlines the SVG at build). A per-value icon is a `match` over static Icons; an icon whose URL is in your data is an `Image`.
 
 **DataTable**
 - Renders raw cell values only; no per-column formatting yet. For formatted cells, use `each` with a `Part`.

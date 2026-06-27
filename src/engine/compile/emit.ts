@@ -60,7 +60,10 @@ export const BUILTINS_JS = `function upper(s) { return String(s == null ? '' : s
   function calendar(iso) { const d = new Date(iso); if (isNaN(d.getTime())) return String(iso == null ? '' : iso); const n = new Date(); const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); const diff = Math.round((day(n) - day(d)) / 86400000); const tm = time(iso); if (diff === 0) return 'Today at ' + tm; if (diff === 1) return 'Yesterday at ' + tm; if (diff === -1) return 'Tomorrow at ' + tm; return date(iso) + ' at ' + tm; }
   function isToday(iso) { const d = new Date(iso); if (isNaN(d.getTime())) return false; const n = new Date(); return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate(); }
   function isPast(iso) { const t = new Date(iso).getTime(); return !isNaN(t) && t < Date.now(); }
-  function isFuture(iso) { const t = new Date(iso).getTime(); return !isNaN(t) && t > Date.now(); }`;
+  function isFuture(iso) { const t = new Date(iso).getTime(); return !isNaN(t) && t > Date.now(); }
+  function daysUntil(iso) { const d = new Date(iso); if (isNaN(d.getTime())) return 0; const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); return Math.round((day(d) - day(new Date())) / 86400000); }
+  function dayKey(iso) { const d = new Date(iso); if (isNaN(d.getTime())) return String(iso == null ? '' : iso); const p = (n) => (n < 10 ? '0' : '') + n; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+  function addDays(iso, n) { const d = new Date(iso); if (isNaN(d.getTime())) return String(iso == null ? '' : iso); d.setDate(d.getDate() + (Number(n) || 0)); return d.toISOString(); }`;
 
 function dataLayer(parts: EmitParts): string {
   return `${BUILTINS_JS}

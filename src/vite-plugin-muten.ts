@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import type { Plugin, ResolvedConfig, HmrContext, ViteDevServer } from 'vite';
 import { parse } from '#engine/lang/parse.js';
 import { toDoc } from '#engine/ir/flatten.js';
-import { load, loadAllParts, findStores } from '#engine/project/load.js';
+import { load, loadAllParts, findStores, storeListEntities } from '#engine/project/load.js';
 import { apiClientNames } from '#engine/project/routes.js';
 import { validate } from '#engine/ir/validate.js';
 import { compileModule, compileStore } from '#engine/compile/compile.js';
@@ -135,12 +135,13 @@ if (root) {
       if (id === '\0' + RID) return RUNTIME; // browser runtime, served as-is
 
       if (id.startsWith('\0' + STORE_PREFIX)) { // one store domain -> compiled ESM slice
-        const ir = slices[id.slice(('\0' + STORE_PREFIX).length)];
+        const domain = id.slice(('\0' + STORE_PREFIX).length);
+        const ir = slices[domain];
         if (ir) {
           // A store compiles to a VIRTUAL module, so a relative `use … from "./x"` has no disk anchor.
           // Rewrite it to a root-absolute path (the store lives at <root>/src/<domain>.store).
           const imports = (ir.imports || []).map((im) => im.from.startsWith('.') ? { ...im, from: '/' + join('src', im.from).replace(/\\/g, '/') } : im);
-          return compileStore({ state: ir.state || {}, gets: ir.gets || {}, actions: ir.actions || {}, effects: ir.effects || [], entities: ir.entities || {}, imports }, ir.mock || {}, ir.sources || {});
+          return compileStore({ state: ir.state || {}, gets: ir.gets || {}, actions: ir.actions || {}, effects: ir.effects || [], entities: ir.entities || {}, imports, domain }, ir.mock || {}, ir.sources || {});
         }
       }
 
@@ -149,7 +150,7 @@ if (root) {
         const doc = toDoc({ ...(appIr || {}), screen: 'shell', entities: {}, state: {}, actions: {}, tree }); // spread appIr so shell `imports` survive; chrome stays state/action-free
         // shell + pages emit only their token CSS; reset/base lives in the project stylesheet
         // loaded once via main, so there's no duplicate .stack fighting the cascade.
-        return compileModule(doc, {}, '', {}, {}, { stores: storesMeta, iconResolver: makeIconResolver(appRoot) });
+        return compileModule(doc, {}, '', {}, {}, { stores: storesMeta, storeEntities: storeListEntities(slices), iconResolver: makeIconResolver(appRoot) });
       }
 
     },
@@ -170,7 +171,8 @@ if (root) {
       // page-to-store action composition. Without it, both are wrongly rejected.
       const storeMembers: { [d: string]: string[] } = {};
       for (const [d, m] of Object.entries(storesMeta)) storeMembers[d] = [...(m.state || []), ...(m.gets || []), ...(m.actions || [])];
-      const { ok, diagnostics } = validate(loaded.doc, { parts: loaded.partNames, stores: Object.keys(storesMeta), storeMembers, classValidator, apiClients: apiClientNames(appIr?.api || {}) });
+      const storeEntities = storeListEntities(slices); // element entity of each store list, so cross-store aggregates resolve
+      const { ok, diagnostics } = validate(loaded.doc, { parts: loaded.partNames, stores: Object.keys(storesMeta), storeMembers, storeEntities, classValidator, apiClients: apiClientNames(appIr?.api || {}) });
       if (!ok) {
         // A TRACKABLE live error: point at the exact .muten line with a code frame + the "did you mean",
         // not a flat join of messages. The dev-server overlay then reads like a TypeScript error.
@@ -199,7 +201,7 @@ if (root) {
       }
 
       // sources live in app.muten (next to `api`), so a page's `query x` resolves against the APP's sources; a page-local `sources` block still overrides.
-      return { code: compileModule(loaded.doc, loaded.data, loaded.styles.css, components, { ...(appIr?.sources || {}), ...loaded.sources }, { stores: storesMeta, api: appIr?.api || {}, iconResolver: makeIconResolver(appRoot) }), map: null };
+      return { code: compileModule(loaded.doc, loaded.data, loaded.styles.css, components, { ...(appIr?.sources || {}), ...loaded.sources }, { stores: storesMeta, storeEntities, api: appIr?.api || {}, iconResolver: makeIconResolver(appRoot) }), map: null };
     },
 
     handleHotUpdate(ctx: HmrContext) {

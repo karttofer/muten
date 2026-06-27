@@ -10,6 +10,9 @@ import { composeDoc } from '#engine/ir/compose.js';
 import { validate } from '#engine/ir/validate.js';
 import { closest, diag, ParseError } from '#engine/shared/diagnostics.js';
 import { readApi, apiClientNames } from '#engine/project/routes.js';
+import { getIconChecker } from '#engine/project/icon-check.js';
+import { findStores, storeListEntities } from '#engine/project/load.js';
+import { selfUpdateTargets } from '#engine/ir/refs.js';
 import { PRIMITIVE_NAMES } from '#engine/lang/manifest.js';
 import type { PartDef, Route, Diagnostic, ValidateResult, StateDef, CompletionResult, CompletionState } from '#engine/shared/types.js';
 
@@ -103,6 +106,28 @@ export function projectStoreMembers(filePath: string): { [domain: string]: strin
   return out;
 }
 
+// "domain.action" of every store action that updates a signal from its own value — so an `effect { domain.action() }`
+// on a PAGE can be flagged as an infinite loop (the effect re-runs on every read, re-triggering the write).
+export function projectStoreSelfMut(filePath: string): string[] {
+  const appRoot = findAppRoot(filePath);
+  if (!appRoot) return [];
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = join(d, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith('.store')) {
+        const domain = e.name.slice(0, -'.store'.length);
+        try { const ir = parse(fs.readFileSync(full, 'utf8')); for (const [an, a] of Object.entries(ir.actions || {})) if (selfUpdateTargets(a.body || []).length) out.push(`${domain}.${an}`); } catch { /* unparseable store: skip */ }
+      }
+    }
+  };
+  walk(join(appRoot, 'src'));
+  return out;
+}
+
 export function projectParts(filePath: string): Parts {
   const appRoot = findAppRoot(filePath);
   if (!appRoot) return loadPartsLite(join(dirname(filePath), 'parts'));
@@ -141,13 +166,15 @@ export function analyze(filePath: string, text: string): ValidateResult {
   if (ir.theme) return { ok: true, diagnostics: [] };       // theme.muten: config only, nothing to validate
   const appRoot = findAppRoot(filePath);
   const apiClients = appRoot ? apiClientNames(readApi(appRoot)) : undefined; // the app's named api clients, so a `post "client:/x"` prefix is checked
+  const iconExists = appRoot ? getIconChecker(appRoot) : undefined;          // `Icon "set:name"` existence, so a typo'd icon lights up live instead of only blanking at build
   if (filePath.endsWith('.store')) { // .store domain slice (state + get + action + effect)
     return validate({ screen: 'store', state: ir.state || {}, actions: ir.actions || {}, entities: ir.entities || {}, gets: ir.gets || {}, effects: ir.effects || [], consts: {}, constraints: {}, rootId: undefined, nodes: {} }, { kind: 'store', apiClients });
   }
   const parts = { ...projectParts(filePath) };
   for (const [name, def] of Object.entries(ir.parts || {})) parts[name] = { ...def, state: {}, entities: {}, mock: {}, css: '' }; // the page's OWN inline parts (load() composes these too — without this the IDE falsely flags them unknown)
   const { doc } = composeDoc(ir, parts); // resolve parts (typos flagged) + hoist state -> flat doc
-  return validate(doc, { parts: Object.keys(parts), stores: projectStores(filePath), storeMembers: projectStoreMembers(filePath), apiClients });
+  const storeEntities = appRoot ? storeListEntities(findStores(join(appRoot, 'src'))) : undefined; // element entity of each store list -> cross-store aggregates resolve in the live editor too
+  return validate(doc, { parts: Object.keys(parts), stores: projectStores(filePath), storeMembers: projectStoreMembers(filePath), apiClients, iconExists, storeSelfMut: new Set(projectStoreSelfMut(filePath)), storeEntities });
 }
 
 // Autocomplete context: parts, state, and actions visible to this file across the whole app.

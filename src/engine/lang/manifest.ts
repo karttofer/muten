@@ -59,7 +59,7 @@ export const PRIMITIVES: { [name: string]: Primitive } = {
   },
   Icon: {
     string: 'name', props: { name: 'text' }, children: false,
-    doc: 'Icon from ANY library via Iconify `set:name`: `Icon "lucide:settings"`, `Icon "tabler:home"`. Inlined as SVG at build (only the icons you use ship — tree-shaken, no runtime). Color + size via class() (uses currentColor + 1em). The set must be installed: `npm i -D @iconify-json/<set>` (scaffold pre-installs lucide). Name is a STATIC literal (resolved at build).',
+    doc: 'Icon from ANY library via Iconify `set:name`: `Icon "lucide:settings"`, `Icon "tabler:home"`. Inlined as SVG at build (only the icons you use ship — tree-shaken, no runtime). Color + size via class() (uses currentColor + 1em). The set must be installed: `npm i -D @iconify-json/<set>` (scaffold pre-installs lucide). Name is a STATIC literal (resolved at build). Data-driven? per-VALUE (status/type) → `match item.status { active -> Icon "lucide:check"  … }` (each arm tree-shakes); an icon whose URL is in the data → `Image "{item.iconUrl}"`.',
     snippet: 'Icon "${1:lucide:settings}"',
   },
   Video: {
@@ -135,7 +135,13 @@ export const MODIFIER_DOCS = {
 
 // Built-in formatting functions: callable like a `use`'d function but ALWAYS available (no import). The bounded
 // answer to "muten has no dates/string ops" — a FIXED set, so the language stays small and the oracle knows them.
-export const BUILTINS = ['upper', 'lower', 'initial', 'truncate', 'money', 'ago', 'date', 'time', 'datetime', 'calendar', 'weekday', 'now', 'isToday', 'isPast', 'isFuture', 'before', 'after'];
+export const BUILTINS = ['upper', 'lower', 'initial', 'truncate', 'money', 'ago', 'date', 'time', 'datetime', 'calendar', 'weekday', 'now', 'isToday', 'isPast', 'isFuture', 'before', 'after', 'daysUntil', 'dayKey', 'addDays'];
+// Identifiers the emitted page/store module already binds — the signals runtime (`signal`/`effect`/…), the
+// injected data layer (`query`, `mount`), and the formatting BUILTINS — all in the SAME scope as a state/get/
+// action const. Naming a state `query` compiles to `const query = …` colliding with the runtime's `query`
+// → `SyntaxError: Identifier 'query' already declared`: a BLANK page that lints green. The oracle rejects these
+// (plus any `__`-prefixed name — every runtime internal uses that prefix). Keep in sync with emit.ts's dataLayer.
+export const RESERVED_NAMES = [...BUILTINS, 'signal', 'computed', 'effect', 'root', 'onCleanup', 'query', 'mount', 'app'];
 export const BUILTIN_DOCS: { [k: string]: string } = {
   upper: 'upper(text) → UPPERCASE.',
   lower: 'lower(text) → lowercase.',
@@ -154,8 +160,11 @@ export const BUILTIN_DOCS: { [k: string]: string } = {
   isFuture: 'isFuture(isoText) → bool: is the date after now? (upcoming events).',
   before: 'before(text, sep) → the part of `text` BEFORE the first `sep` (whole string if not found): `before(user.email, "@")` → the username; `before(name, " ")` → first name.',
   after: 'after(text, sep) → the part of `text` AFTER the first `sep` (empty if not found): `after(user.email, "@")` → the domain.',
+  daysUntil: 'daysUntil(isoText) → whole days from today to the date (negative if past, 0 = today): `Span "in {daysUntil(appt.date)} days"`. Pair with isToday/isPast for nicer labels.',
+  dayKey: 'dayKey(isoText) → the calendar day as "YYYY-MM-DD" (drops the time). Match an event to a day cell or group by day: `when dayKey(event.date) == dayKey(cell.date) { … }`.',
+  addDays: 'addDays(isoText, n) → the date shifted by n days (n may be negative), as an ISO string. Compute a due date or a range bound.',
 };
-export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'every', 'live', 'persist', 'post', 'put', 'delete', 'body', 'if', 'when', 'each', 'as', 'where', 'by', 'with', 'and', 'or', 'not', 'contains', 'use', 'from'];
+export const KEYWORDS = ['screen', 'entity', 'state', 'store', 'const', 'theme', 'get', 'effect', 'action', 'mutates', 'mock', 'sources', 'api', 'meta', 'routes', 'shell', 'guard', 'else', 'part', 'param', 'query', 'every', 'live', 'persist', 'post', 'put', 'delete', 'body', 'into', 'if', 'when', 'each', 'as', 'where', 'by', 'with', 'and', 'or', 'not', 'contains', 'use', 'from'];
 export const KEYWORD_DOCS = {
   screen: 'Declares the screen name: `screen users_dashboard`.',
   entity: 'Declares a data shape + validation: `entity User { name text required  email email required  zip text pattern:"^\\d{5}$" }` (implicit uuid id). Constraints: `required`, `min:N`, `max:N`, `pattern:"<regex>"`. An `email` field validates its format on submit; `pattern` matches a value against your regex.',

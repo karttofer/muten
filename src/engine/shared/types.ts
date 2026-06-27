@@ -104,7 +104,7 @@ export type StringPropName = 'value' | 'label' | 'src' | 'alt' | 'name' | 'place
 export interface PushStmt { op: StOp.Push; target: string; arg: Expr; }
 export interface SetStmt { op: StOp.Set; target: string; arg: Expr; }
 export interface ResetStmt { op: StOp.Reset; target: string; }
-export interface ToggleStmt { op: StOp.Toggle; target: string; } // `open.toggle()` -> `open.set(!open)`
+export interface ToggleStmt { op: StOp.Toggle; target: string; arg?: Expr; } // `open.toggle()` -> flip a bool; `favs.toggle(x)` -> add/remove x in a list<scalar> (membership)
 export interface RemoveStmt { op: StOp.Remove; target: string; pred: Expr; } // e.g. `tasks.remove where id == taskId` (item-implicit)
 export interface PatchStmt { op: StOp.Patch; target: string; pred: Expr; patch: Expr; } // e.g. `tasks.patch where id == taskId with { done: true }`, position-preserving (item-implicit)
 /** Server CRUD on a source-backed list: POST/PUT/DELETE the item, then reflect the result in the list. */
@@ -114,7 +114,7 @@ export interface DeleteStmt { op: StOp.Delete; target: string; arg: Expr; }
 /** Re-run a query with N query-string params (pagination / search / filters): `products.refetch(q: x, page: n)`. */
 export interface RefetchStmt { op: StOp.Refetch; target: string; params: { [k: string]: Expr }; }
 /** Explicit non-REST request (escape hatch): `post "shop:/orders" body item`, `delete "shop:/x/{id}"`. */
-export interface RequestStmt { op: StOp.Request; method: string; url: string | Interp; body: Expr | null; }
+export interface RequestStmt { op: StOp.Request; method: string; url: string | Interp; body: Expr | null; into?: string; } // `into <state>` captures the JSON response (order id / confirmation code)
 export interface CallStmt { op: StOp.Call; target: string; method: string; args: Expr[]; } // page action calling a store action, e.g. `shop.addProduct(draft)`
 /** Calling a `use`'d function as a side-effect statement: `persist(messages)`, `scrollBottom()`. Bounded: the fn is declared + checked. */
 export interface ExternStmt { op: StOp.Extern; fn: string; args: Expr[]; }
@@ -369,6 +369,8 @@ export interface CompileOpts {
   storeCode?: string;                // standalone build only: `.store` slices inlined (CLI SSG has no virtual modules -> `muten build` bakes them into the page)
   api?: { [name: string]: Value };   // app-wide backend config (base + default headers) applied to `sources`
   iconResolver?: (ref: string) => string;  // `Icon "set:name"` -> inline SVG, resolved at build (Iconify). Provided by the vite plugin; absent in unit/SSG -> Icon renders empty.
+  storeEntities?: { [domainDotMember: string]: Entity };  // element entity of each store list, so a page aggregate over a store list emits the right item fields
+  persistScope?: string;            // namespaces `persist` keys (a store's domain / a page's screen) so two scopes' same-named state don't share one localStorage key
 }
 
 /** One screen's resolved compile context shared by compile.ts (DOM) and logic.ts.
@@ -385,6 +387,8 @@ export interface CompileCtx {
   stores: { [domain: string]: StoreSlice };
   usedStores: Set<string>;    // store domains actually referenced (-> import list)
   params: Set<string>;        // route params (`param id`) -> local string injected at mount
+  storeEntities?: { [domainDotMember: string]: Entity };  // element entity of each store list, so a cross-store aggregate emits __it.<field>
+  persistScope: string;             // namespace for `persist` localStorage keys (store domain / page screen)
   format?: Fmt;
 }
 
@@ -401,6 +405,7 @@ export interface StoreInput {
   effects?: Stmt[][];
   entities?: { [name: string]: Entity };
   imports?: ImportDef[];                          // `use fmt from "./lib.ts"` -> without this, use'd calls in a store have no import (ReferenceError)
+  domain?: string;                                // the store's domain (filename) -> namespaces its `persist` localStorage keys so two stores' same-named state don't collide
 }
 
 /** The pre-computed pieces an emit target assembles into the final output (HTML/module/store). */
@@ -443,6 +448,9 @@ export interface ValidateCtx {
   kind?: FileKind;
   classValidator?: ClassValidator;                // when set, class() names are validated against the framework's theme
   apiClients?: string[];                           // named api clients (from app.muten `api {}`); a `post "client:/x"` prefix is checked against these. undefined -> not threaded, skip the check
+  iconExists?: (ref: string) => string | null;     // `Icon "set:name"` existence check (reads the set's icons.json). null -> ok; a string -> the error. undefined -> not threaded (skip)
+  storeSelfMut?: Set<string>;                       // "domain.action" of store actions that update a signal from its own value -> an `effect { domain.action() }` loops forever
+  storeEntities?: { [domainDotMember: string]: Entity };  // element entity of each store list ("orders.items" -> Order fields), so a page can aggregate over a store list (`orders.items.count where …`)
 }
 
 /** A lexical scope while compiling expressions: lambda locals + the action input. */

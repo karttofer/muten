@@ -101,8 +101,8 @@ const ok = (l, c, e = '') => { console.log((c ? '✓' : '✗') + ' ' + l + (c ? 
 // `persist` backs a local state with localStorage: hydrate on load (fallback to the declared initial) + save on change
 {
   const code = compile(toDoc(parse('screen s\nstate { mode = "dark" : text persist }\nPage { Text "{mode}" }')), {}, '', {}, {}, { format: 'module' });
-  ok('persist: hydrates from localStorage with fallback', code.includes('signal(__loadLocal("muten:mode", "dark"))'), '');
-  ok('persist: saves on every change via an effect', code.includes('effect(() => __saveLocal("muten:mode", mode.get()))'), '');
+  ok('persist: hydrates from localStorage with fallback', code.includes('signal(__loadLocal("muten:s:mode", "dark"))'), ''); // key namespaced by scope (screen "s")
+  ok('persist: saves on every change via an effect', code.includes('effect(() => __saveLocal("muten:s:mode", mode.get()))'), '');
 }
 // `match subject { v -> … }` is SUGAR: desugars to one `when subject == "v"` per arm (validate/compile see Whens).
 {

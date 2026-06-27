@@ -101,14 +101,16 @@ const diagsOf = (src, ctx = {}) => validate(toDoc(parse(src)), ctx).diagnostics;
   check('correct state name is clean (no false positive)', okClean.length === 0, JSON.stringify(okClean.map((d) => d.code)));
 }
 
-// 12. `sort by <state>` was fail-OPEN: the docs say the key must be a literal field, but the linter let a state
-// variable through and it compiled to a no-op comparator (same constant for every row → list never sorts).
+// 12. dynamic sort column: `sort by <text-state>` names the column at runtime (__it[value]) — the user-chosen-
+// column case. Was fail-closed (no-op); now supported. A number/bool key (can't name a field) is flagged.
 {
   const ent = 'entity D { amount number  stage text }\n';
-  const bad = diagsOf(`screen s\n${ent}state { deals = [] : list<D>  sortKey = "amount" : text }\nget sorted = deals.sortDesc by sortKey\nPage { each sorted as d { Text "{d.stage}" } }`);
-  check('sort by a state variable flagged (no silent no-op)', bad.some((d) => d.code === 'sort-key-not-field'), JSON.stringify(bad.map((d) => d.code)));
+  const dyn = diagsOf(`screen s\n${ent}state { deals = [] : list<D>  sortCol = "amount" : text }\nget sorted = deals.sortDesc by sortCol\nPage { each sorted as d { Text "{d.stage}" } }`);
+  check('dynamic sort by a text state is allowed', dyn.every((d) => d.code !== 'sort-key-type' && d.code !== 'sort-key-not-field'), JSON.stringify(dyn.map((d) => d.code)));
+  const badType = diagsOf(`screen s\n${ent}state { deals = [] : list<D>  n = 0 : number }\nget sorted = deals.sortDesc by n\nPage { each sorted as d { Text "{d.stage}" } }`);
+  check('dynamic sort by a NUMBER state flagged', badType.some((d) => d.code === 'sort-key-type'), JSON.stringify(badType.map((d) => d.code)));
   const ok = diagsOf(`screen s\n${ent}state { deals = [] : list<D> }\nget sorted = deals.sortDesc by amount\nPage { each sorted as d { Text "{d.stage}" } }`);
-  check('sort by a real field is clean (no false positive)', ok.every((d) => d.code !== 'sort-key-not-field'), JSON.stringify(ok.map((d) => d.code)));
+  check('sort by a real field is clean (no false positive)', ok.every((d) => d.code !== 'sort-key-type'), JSON.stringify(ok.map((d) => d.code)));
 }
 
 // 13. dynamic/interpolated Icon name was lint-clean but build-FAILS (icons inline at build → name must be static).
@@ -117,6 +119,76 @@ const diagsOf = (src, ctx = {}) => validate(toDoc(parse(src)), ctx).diagnostics;
   check('dynamic Icon name flagged at lint (not build)', bad.some((d) => d.code === 'icon-name'), JSON.stringify(bad.map((d) => d.code)));
   const ok = diagsOf('screen s\nPage { Icon "lucide:settings" }');
   check('static Icon name is clean (no false positive)', ok.every((d) => d.code !== 'icon-name'), JSON.stringify(ok.map((d) => d.code)));
+}
+
+// 14. reserved-name: a state/get/action named like a runtime/builtin identifier compiles to a duplicate
+// `const` in the same scope → SyntaxError, a blank page that lints green. (youtube `state { query }` crash.)
+{
+  const q = diagsOf('screen s\nstate { query = "" : text }\nPage { Text "{query}" }').find((x) => x.code === 'reserved-name');
+  check('state named `query` flagged (runtime collision)', !!q, 'no diagnostic');
+  const money = diagsOf('screen s\nstate { money = 0 : number }\nPage { Text "x" }').find((x) => x.code === 'reserved-name');
+  check('state named `money` flagged (builtin collision)', !!money, 'no diagnostic');
+  const us = diagsOf('screen s\nstate { __x = 0 : number }\nPage { Text "x" }').find((x) => x.code === 'reserved-name');
+  check('state with `__` prefix flagged (runtime-internal)', !!us, 'no diagnostic');
+  const ok = diagsOf('screen s\nstate { total = 0 : number }\nPage { Text "x" }');
+  check('a normal state name is clean (no false positive)', ok.every((d) => d.code !== 'reserved-name'), JSON.stringify(ok.map((d) => d.code)));
+}
+
+// 15. route-param shadow: a `param id` that is also an entity field, used bare in an item-implicit `where`,
+// silently resolves to the field (the row's own id), not the URL value — always-wrong, lint-green. (shop bug.)
+{
+  const ent = 'entity Review { id text  productId text }\n';
+  const bad = diagsOf(`screen s\nparam id\n${ent}state { reviews = [] : list<Review> }\nget n = reviews.count where productId == id\nPage { Text "{n}" }`);
+  check('route-param shadow in count-where flagged', bad.some((d) => d.code === 'item-shadow' && d.message.includes('route')), JSON.stringify(bad.map((d) => d.code)));
+  const ok = diagsOf(`screen s\nparam pid\n${ent}state { reviews = [] : list<Review> }\nget n = reviews.count where productId == pid\nPage { Text "{n}" }`);
+  check('a non-colliding route param is clean (no false positive)', ok.every((d) => d.code !== 'item-shadow'), JSON.stringify(ok.map((d) => d.code)));
+}
+
+// 16. icon NAME existence (not just shape): a typo'd name passing the `set:name` shape was lint-green but
+// crashed the build. With an iconExists checker threaded, the oracle catches it first. (maps `hand-pointer`.)
+{
+  const stub = (ref) => ref.endsWith(':nope') ? 'no icon named "nope" in set "lucide".' : null;
+  const bad = diagsOf('screen s\nPage { Icon "lucide:nope" }', { iconExists: stub }).find((x) => x.code === 'icon-name');
+  check('non-existent icon name flagged (via iconExists)', !!bad, 'no diagnostic');
+  const ok = diagsOf('screen s\nPage { Icon "lucide:settings" }', { iconExists: stub });
+  check('an existing icon name is clean (no false positive)', ok.every((d) => d.code !== 'icon-name'), JSON.stringify(ok.map((d) => d.code)));
+  const noChecker = diagsOf('screen s\nPage { Icon "lucide:nope" }'); // not threaded → shape ok → no existence error
+  check('no false positive when iconExists is absent', noChecker.every((d) => d.code !== 'icon-name'), JSON.stringify(noChecker.map((d) => d.code)));
+}
+
+// 17. self-referential effect = infinite loop: an effect re-runs on every signal it reads, so a TOP-LEVEL
+// write of a signal it reads (directly, or via a store action) self-triggers forever — the page hangs silently.
+{
+  const direct = diagsOf('screen s\nstate { n = 0 : number }\neffect { n.set(n + 1) }\nPage { Text "{n}" }');
+  check('direct self-update effect flagged (n.set(n+1))', direct.some((d) => d.code === 'effect-loop'), JSON.stringify(direct.map((d) => d.code)));
+  const store = diagsOf('screen s\nstate { x = "" : text }\neffect { ui.visit() }\nPage { Text "{x}" }', { stores: ['ui'], storeMembers: { ui: ['visit'] }, storeSelfMut: new Set(['ui.visit']) });
+  check('effect calling a self-updating store action flagged', store.some((d) => d.code === 'effect-loop'), JSON.stringify(store.map((d) => d.code)));
+  const safe = diagsOf('screen s\nstate { x = "" : text }\neffect { x.set("hi") }\nPage { Text "{x}" }');
+  check('effect setting a constant is clean (no false positive)', safe.every((d) => d.code !== 'effect-loop'), JSON.stringify(safe.map((d) => d.code)));
+  const guarded = diagsOf('screen s\nentity I { v text }\nstate { items = [] : list<I> }\neffect { if items.length == 0 { items.push({ v: "x" }) } }\nPage { each items as i { Text "{i.v}" } }');
+  check('guarded self-write (converges) is clean (no false positive)', guarded.every((d) => d.code !== 'effect-loop'), JSON.stringify(guarded.map((d) => d.code)));
+}
+
+// 18. cross-store aggregate: a PAGE can `count/sum/where` over a STORE's list (the element fields resolve via
+// the threaded storeEntities). Was fail-CLOSED ("status is not a known state"); now resolves AND still catches typos.
+{
+  const ordersEnt = { customer: 'text', amount: 'number', status: 'text' };
+  const ctx = { stores: ['orders'], storeMembers: { orders: ['items'] }, storeEntities: { 'orders.items': ordersEnt } };
+  const ok = diagsOf('screen s\nstate { f = "paid" : text }\nget n = orders.items.count where status == f\nget rev = orders.items.sum by amount\nPage { Text "{n} {rev}" }', ctx);
+  check('cross-store aggregate resolves element fields (no false unknown-ref)', ok.every((d) => d.code !== 'unknown-ref'), JSON.stringify(ok.map((d) => d.code)));
+  const typo = diagsOf('screen s\nget n = orders.items.count where staus == "x"\nPage { Text "{n}" }', ctx).find((d) => d.code === 'unknown-ref');
+  check('a typo in a cross-store aggregate field is still flagged', !!typo, 'no diagnostic — over-permissive');
+}
+
+// 19. `list.take(n)` — first n items for top-N / pagination. Resolves the element (each over it field-checks),
+// and the count must be a number.
+{
+  const ok2 = diagsOf('screen s\nentity P { name text }\nstate { items = [] : list<P>  n = 3 : number }\nget top = items.take(n)\nPage { each items.take(n) as p { Text "{p.name}" } }');
+  check('take(n) clean + each over take resolves element fields', ok2.every((d) => d.code !== 'unknown-ref' && d.code !== 'unknown-function'), JSON.stringify(ok2.map((d) => d.code)));
+  const typo = diagsOf('screen s\nentity P { name text }\nstate { items = [] : list<P> }\nPage { each items.take(2) as p { Text "{p.naem}" } }').find((d) => d.code === 'unknown-member');
+  check('a field typo on an each-over-take item is still caught', !!typo, 'no diagnostic');
+  const badN = diagsOf('screen s\nentity P { name text }\nstate { items = [] : list<P>  q = "" : text }\nget top = items.take(q)\nPage { Text "x" }').find((d) => d.code === 'take-count');
+  check('take with a non-number count flagged', !!badN, 'no diagnostic');
 }
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL OK');

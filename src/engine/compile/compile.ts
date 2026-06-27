@@ -24,7 +24,7 @@ export function compileModule(doc: Doc, data: { [name: string]: Value } = {}, pr
 // Emit one .store domain slice (state + get + actions + effects) as a shared ESM module.
 export function compileStore(input: StoreInput = {}, data: { [name: string]: Value } = {}, sources: { [name: string]: Value } = {}): string {
   const { state = {}, gets = {}, actions = {}, effects = [], entities = {}, imports = [] } = input;
-  return compile({ screen: 'store', entities, state, actions, gets, effects, imports, consts: {}, constraints: {}, rootId: undefined, nodes: {} }, data, '', {}, sources, { format: Fmt.Store });
+  return compile({ screen: 'store', entities, state, actions, gets, effects, imports, consts: {}, constraints: {}, rootId: undefined, nodes: {} }, data, '', {}, sources, { format: Fmt.Store, persistScope: input.domain });
 }
 
 export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectCss = '', components: { [name: string]: string } = {}, sources: { [name: string]: Value } = {}, opts: CompileOpts = {}): string {
@@ -54,7 +54,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   const usedStores = new Set<string>();
   const ctx: CompileCtx = {
     state, entities, actions: doc.actions, consts: doc.consts || {}, gets: doc.gets || {}, effects: doc.effects || [],
-    stateKeys, queryStates, stores: opts.stores || {}, usedStores, params: new Set(doc.params || []), format: opts.format,
+    stateKeys, queryStates, stores: opts.stores || {}, usedStores, params: new Set(doc.params || []), storeEntities: opts.storeEntities, persistScope: opts.persistScope ?? screen, format: opts.format,
   };
   const logic = new Logic(ctx);
   const pageScope: Scope = { locals: new Set() }; // page-level scope for interpolation, when/each

@@ -70,7 +70,7 @@ export class Parser extends Grammar {
       [StOp.Push, (target: string): Stmt => ({ op: StOp.Push, target, arg: this.parseExpr() })],
       [StOp.Set, (target: string): Stmt => ({ op: StOp.Set, target, arg: this.parseExpr() })],
       [StOp.Reset, (target: string): Stmt => ({ op: StOp.Reset, target })],
-      [StOp.Toggle, (target: string): Stmt => ({ op: StOp.Toggle, target })], // flip a bool
+      [StOp.Toggle, (target: string): Stmt => this.at(Tk.Punct, Pn.ParenR) ? { op: StOp.Toggle, target } : { op: StOp.Toggle, target, arg: this.parseExpr() }], // `open.toggle()` flips a bool; `favs.toggle(x)` toggles x's membership in a list<scalar>
       // remove/patch are NOT here: they parse inline as `remove where <cond>` / `patch where <cond> with { ... }` (no parens, item-implicit)
       [StOp.Create, (target: string): Stmt => ({ op: StOp.Create, target, arg: this.parseExpr() })], // POST to source
       [StOp.Update, (target: string): Stmt => ({ op: StOp.Update, target, arg: this.parseExpr() })], // PUT /:id
@@ -251,7 +251,10 @@ export class Parser extends Grammar {
     const ut = this.eat(Tk.String); const url = this.parseInterpolation(ut.v, ut.pos + 1);
     let body: Expr | null = null;
     if (this.at(Tk.Ident, Kw.Body)) { this.next(); body = this.parseExpr(); }
-    return { op: StOp.Request, method, url, body };
+    // optional `into <state>`: capture the JSON response (e.g. an order id / confirmation code) into a local state.
+    let into: string | undefined;
+    if (this.at(Tk.Ident, Kw.Into)) { this.next(); into = this.eat(Tk.Ident).v; }
+    return { op: StOp.Request, method, url, body, into };
   }
 
   private parseStatement(): Stmt {

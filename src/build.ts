@@ -7,10 +7,16 @@ import { Nt, Fmt } from '#engine/shared/vocab.js';
 import { readRoutes, readApi, readSources } from '#engine/project/routes.js';
 import { renderSsrBody, fetchSources } from '#engine/project/ssr.js';
 import { routeEntry } from '#engine/project/map.js';
-import { load, loadAllParts, findStores } from '#engine/project/load.js';
+import { load, loadAllParts, findStores, storeListEntities } from '#engine/project/load.js';
+import { resolveStyles } from '#engine/project/styles.js';
+import { emitTheme } from '#engine/style/tokens.js';
+import { parse } from '#engine/lang/parse.js';
 import { validateStoresAndGuards } from '#engine/project/check-app.js';
 import { validate } from '#engine/ir/validate.js';
+import { selfUpdateTargets } from '#engine/ir/refs.js';
+import { getIconChecker } from '#engine/project/icon-check.js';
 import { compile, compileStore } from '#engine/compile/compile.js';
+import { makeIconResolver } from './icons.js';
 import { formatDiagnostic, ParseError } from '#engine/shared/diagnostics.js';
 import type { Diagnostic, AppMap, StoreSlice } from '#engine/shared/types.js';
 
@@ -32,6 +38,14 @@ export async function buildApp(appRoot: string, outDir = join(appRoot, 'dist'), 
   // store refs as bare undefined identifiers (missing `import * as __store_...`) -> runtime ReferenceError.
   const storesMeta: { [d: string]: StoreSlice } = {};
   for (const [d, ir] of Object.entries(storeIRs)) storesMeta[d] = { state: Object.keys(ir.state || {}), gets: Object.keys(ir.gets || {}), actions: Object.keys(ir.actions || {}) };
+  // the SAME validate context `check` (lint.ts) builds, so `build` never disagrees with `check`: cross-store
+  // element entities, icon existence, and the effect→store loop guard. (Was missing -> a page using a
+  // cross-store aggregate / a bad icon passed `check` but failed or shipped broken from `build`.)
+  const storeEntities = storeListEntities(storeIRs);
+  const storeSelfMut = new Set<string>();
+  for (const [d, ir] of Object.entries(storeIRs)) for (const [an, a] of Object.entries(ir.actions || {})) if (selfUpdateTargets(a.body || []).length) storeSelfMut.add(`${d}.${an}`);
+  const iconExists = getIconChecker(appRoot);
+  const iconResolver = makeIconResolver(appRoot); // so `Icon "set:name"` renders real SVG in the static HTML (was empty)
 
   // .store bodies + route guards: same validation `check` runs (shared check-app.ts, no drift).
   // Without this, a fix only in `check` silently ships broken from `build`.
@@ -42,10 +56,19 @@ export async function buildApp(appRoot: string, outDir = join(appRoot, 'dist'), 
   // Dev resolves stores via virtual:muten/store/*; the static build has no equivalent, so
   // compileStore output is stripped of import/export and wrapped as a self-contained IIFE namespace.
   const storeCode = Object.entries(storeIRs).map(([domain, ir]) => {
-    const mod = compileStore({ state: ir.state || {}, gets: ir.gets || {}, actions: ir.actions || {}, effects: ir.effects || [], entities: ir.entities || {}, imports: ir.imports || [] }, ir.mock || {}, ir.sources || {});
+    const mod = compileStore({ state: ir.state || {}, gets: ir.gets || {}, actions: ir.actions || {}, effects: ir.effects || [], entities: ir.entities || {}, imports: ir.imports || [], domain }, ir.mock || {}, ir.sources || {});
     const body = mod.replace(/^[ \t]*import .*$/gm, '').replace(/^([ \t]*)export /gm, '$1'); // strip imports/exports so the body is inlineable (runtime + __id are already in scope)
     return `const __store_${domain} = (function () {\n${body}\nreturn { ${storeMembers[domain].join(', ')} };\n})();`;
   }).join('\n');
+
+  // The standalone build is ONE self-contained HTML per route, so the app's look must be inlined: the
+  // theme (`theme.muten` -> :root CSS vars) + the project stylesheet (`src/styles.css|scss`, which carries
+  // the mu-* base + every class()). The dev server injects these via the boot module; the SSG had neither,
+  // so its pages rendered structurally correct but UNSTYLED. Inline them ahead of each page's own styles.
+  const themeFile = join(appRoot, 'theme.muten');
+  const themeRaw = existsSync(themeFile) ? (parse(readFileSync(themeFile, 'utf8')).theme || {}) : {};
+  const projectStyles = (await resolveStyles(join(appRoot, 'src', 'styles.muten'))).css; // resolves src/styles.css|scss
+  const appCss = emitTheme(themeRaw) + '\n' + projectStyles;
 
   const pages = readRoutes(appRoot); // throws on missing/duplicate/dangling routes
   const api = readApi(appRoot);      // app-wide backend config (base + headers) for source fetches
@@ -76,7 +99,7 @@ export async function buildApp(appRoot: string, outDir = join(appRoot, 'dist'), 
     const useFns = (doc.imports || []).flatMap((i) => i.names);
     if (useFns.length) console.log(`  ⚠ /${page.route}: \`use\` function(s) ${useFns.join(', ')} are NOT inlined into the standalone build — they'll throw at runtime. Use \`vite build\` for a bundle that includes them.`);
 
-    const { ok, diagnostics } = validate(doc, { parts: partNames, stores, storeMembers }); // project-aware validation (parity with `check`)
+    const { ok, diagnostics } = validate(doc, { parts: partNames, stores, storeMembers, storeEntities, storeSelfMut, iconExists }); // project-aware validation (FULL parity with `check`)
     if (!ok) throw new Error(`/${page.route}\n` + diagnostics.map((d) => '   ' + formatDiagnostic(d, rel(page.screenPath))).join('\n'));
 
     // host-written Custom components referenced in the tree are opaque and inlined into the output
@@ -92,13 +115,14 @@ export async function buildApp(appRoot: string, outDir = join(appRoot, 'dist'), 
     // Static pages emit zero-JS HTML. Reactive pages emit a CSR shell (empty #app + script);
     // pre-render by executing against the build-time DOM so crawlers and first-paint get real markup.
     // On any SSR failure (stores, exotic Custom), fall back to the CSR shell.
-    const csr = compile(doc, data, styles.css, components, sources, { api, stores: storesMeta, storeCode });
+    const pageCss = appCss + '\n' + styles.css; // theme + project stylesheet + this page's colocated styles
+    const csr = compile(doc, data, pageCss, components, sources, { api, stores: storesMeta, storeCode, storeEntities, iconResolver });
     let html = csr, ssrd = false;
     if (csr.includes('<div id="app"></div>')) {
       try {
         // fetch remote sources at build time so source-backed lists pre-render with real data, not just mock
         const ssrData = Object.keys(sources).length ? { ...data, ...await fetchSources(sources, api) } : data;
-        const body = renderSsrBody(compile(doc, ssrData, styles.css, components, sources, { format: Fmt.Ssr, api, stores: storesMeta, storeCode }));
+        const body = renderSsrBody(compile(doc, ssrData, pageCss, components, sources, { format: Fmt.Ssr, api, stores: storesMeta, storeCode, storeEntities, iconResolver }));
         html = csr.replace('<div id="app"></div>', `<div id="app">${body}</div>`);
         ssrd = true;
       } catch { /* keep the CSR shell — the client renders it */ }

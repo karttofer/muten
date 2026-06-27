@@ -5,7 +5,7 @@
 
 import { Ek, StOp, BOp, UOp, Fmt } from '#engine/shared/vocab.js';
 import { JS_BINOP } from '#engine/compile/helpers.js';
-import { elementType, elementFields, type RefFacts } from '#engine/ir/refs.js';
+import { listElementFields, type RefFacts } from '#engine/ir/refs.js';
 import type { CompileCtx, Expr, Stmt, Scope, Value, ValueObject } from '#engine/shared/types.js';
 
 export class Logic {
@@ -46,13 +46,13 @@ export class Logic {
 
   // the SHARED resolver's inputs — the SAME facts the linter holds (engine/ir/refs.ts), so what a list
   // resolves to can never drift between lint and runtime (the old two-layer ReferenceError bug).
-  private get refFacts(): RefFacts { return { state: this.ctx.state, gets: this.ctx.gets, entities: this.ctx.entities }; }
+  private get refFacts(): RefFacts { return { state: this.ctx.state, gets: this.ctx.gets, entities: this.ctx.entities, storeEntities: this.ctx.storeEntities }; }
 
   // bare-referenceable fields of `<list>`'s element, for a `where`/`by` item-implicit scope — via the
   // SHARED resolver, so the linter and the emitter agree on exactly which fields a row exposes
   // (`tasks : list<Task>` -> { id, ...Task fields }; a non-entity element (list<uuid>) -> just `id`).
   private itemFields(list: string): Set<string> {
-    return elementFields(elementType(list.split('.')[0], this.refFacts), this.refFacts);
+    return listElementFields(list, this.refFacts);
   }
 
   // does the body contain a server write (create/update/delete)? recurses into if-branches.
@@ -106,10 +106,17 @@ export class Logic {
     if (node.kind === Ek.Obj) return `{ ${node.fields.map((f) => `${JSON.stringify(f.key)}: ${this.compileExpr(f.value, scope)}`).join(', ')} }`; // inline object literal
     if (node.kind === Ek.Agg) { // `list.sum by expr` / `list.count where cond` -> reduce/filter; item fields read bare off `__it`
       const list = `(${this.resolveRef(node.list, scope)} ?? [])`;
+      if (node.op === 'take') return `[...${list}].slice(0, ${this.compileExpr(node.body, scope)})`; // `list.take(n)` -> first n items (the count reads no item fields)
       const body = this.compileExpr(node.body, { ...scope, item: { var: '__it', fields: this.itemFields(node.list) } });
       if (node.op === 'sort' || node.op === 'sortDesc') { // sort a copy by projected key (no mutation of the source signal)
         const dir = node.op === 'sortDesc' ? -1 : 1;
-        const key = `((__it) => ${body})`;
+        const itemF = this.itemFields(node.list);
+        // a key that is a bare ref to something OTHER than a row field (a state/get/const) names the column
+        // DYNAMICALLY at runtime: `each rows.sort by sortCol` with sortCol = "price" -> sort by __it["price"].
+        // (A user-chosen sort column — the realistic sortable-table need. A literal row field stays static.)
+        const b = node.body;
+        const dyn = b.kind === Ek.Ref && !b.name.includes('.') && b.name !== 'id' && itemF.size > 0 && !itemF.has(b.name);
+        const key = dyn && b.kind === Ek.Ref ? `((__it) => __it[${this.resolveRef(b.name, scope)}])` : `((__it) => ${body})`;
         return `[...${list}].sort((__a, __b) => { const __ka = ${key}(__a), __kb = ${key}(__b); return (__ka < __kb ? -1 : __ka > __kb ? 1 : 0) * ${dir}; })`;
       }
       const reduce = (init: string, step: string): string => `${list}.reduce((__a, __it) => ${step}, ${init})`;
@@ -159,7 +166,10 @@ export class Logic {
         out.push(`${st.target}.set(${JSON.stringify(ctx.state[st.target].initial ?? null)});`);
         break;
       case StOp.Toggle:
-        out.push(`${st.target}.set(!${st.target}.get());`); // boolean flip
+        if (st.arg !== undefined) { // list<scalar> membership: present -> remove, absent -> add (the toggle-OFF a scalar `remove` can't do)
+          const v = this.compileExpr(st.arg, scope);
+          out.push(`{ const __v = ${v}, __l = ${st.target}.get(); ${st.target}.set(__l.includes(__v) ? __l.filter((__e) => __e !== __v) : [...__l, __v]); }`);
+        } else out.push(`${st.target}.set(!${st.target}.get());`); // boolean flip
         break;
       case StOp.Set:
         out.push(`${st.target}.set(${this.compileExpr(st.arg, scope)});`);
@@ -232,7 +242,9 @@ export class Logic {
         const url = typeof st.url === 'string' ? JSON.stringify(st.url)
           : st.url.parts.map((p) => typeof p === 'string' ? JSON.stringify(p) : `String(${this.compileExpr(p, scope)})`).join(' + ');
         const body = st.body ? this.compileExpr(st.body, scope) : 'null';
-        out.push(isAsync ? `await __send(${url}, ${JSON.stringify(st.method)}, ${body});` : `__send(${url}, ${JSON.stringify(st.method)}, ${body}).catch(() => {});`);
+        const send = `__send(${url}, ${JSON.stringify(st.method)}, ${body})`;
+        if (st.into) out.push(isAsync ? `${st.into}.set(await ${send});` : `${send}.then((__r) => ${st.into}.set(__r)).catch(() => {});`); // capture the JSON response into a local state
+        else out.push(isAsync ? `await ${send};` : `${send}.catch(() => {});`);
         break;
       }
       case StOp.Call:
@@ -273,7 +285,9 @@ export class Logic {
           });
         }
         if (def.persist) { // localStorage-backed: hydrate from storage (fallback to the declared initial), save on every change
-          const key = JSON.stringify('muten:' + name);
+          // namespace by scope (store domain / page screen) so two stores with the same state name (`items`)
+          // don't share ONE localStorage key — the silent cross-store data bleed.
+          const key = JSON.stringify('muten:' + this.ctx.persistScope + ':' + name);
           out.push(`${exp}const ${name} = signal(__loadLocal(${key}, ${JSON.stringify(initial)}));`);
           out.push(`effect(() => __saveLocal(${key}, ${name}.get()));`);
         } else {
