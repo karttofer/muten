@@ -371,6 +371,7 @@ export interface CompileOpts {
   iconResolver?: (ref: string) => string;  // `Icon "set:name"` -> inline SVG, resolved at build (Iconify). Provided by the vite plugin; absent in unit/SSG -> Icon renders empty.
   storeEntities?: { [domainDotMember: string]: Entity };  // element entity of each store list, so a page aggregate over a store list emits the right item fields
   persistScope?: string;            // namespaces `persist` keys (a store's domain / a page's screen) so two scopes' same-named state don't share one localStorage key
+  classes?: { [slot: string]: string };  // styling-plugin class map: a primitive's internal parts (Form's input/label/submit/…) emit these instead of the default `mu-*` — so a library (DaisyUI) restyles the auto-generated bits with NO bridge CSS, while the engine stays agnostic (ships only the `mu-*` defaults)
 }
 
 /** One screen's resolved compile context shared by compile.ts (DOM) and logic.ts.
@@ -394,7 +395,7 @@ export interface CompileCtx {
 
 /** An editable Form field derived from an entity (excludes the auto uuid id). */
 export interface EnumField { name: string; kind: Fk.Enum; options: string[]; }
-export interface SimpleField { name: string; kind: Fk.Text | Fk.Email | Fk.Number | Fk.Bool | Fk.Date; }
+export interface SimpleField { name: string; kind: Fk.Text | Fk.Email | Fk.Number | Fk.Bool | Fk.Date | Fk.Password | Fk.Textarea; }
 export type EditableField = EnumField | SimpleField;
 
 /** Input to compileStore(): one .store domain slice (state + get + actions + effects + entities). */
@@ -516,7 +517,7 @@ export interface RouteDef { load(): Promise<PageModule>; guard?: () => boolean; 
  *  The engine ships NONE and expects no library; a plugin provides how to emit the theme (a ThemeAdapter,
  *  data) and optionally how to validate class() (e.g. via that library's own tooling). */
 export type ClassValidatorLoader = (cssPath: string, base: string, themeRaw: ThemeRaw) => Promise<ClassValidator>;
-export interface StylingPlugin { theme?: ThemeAdapter; validate?: ClassValidatorLoader; }
+export interface StylingPlugin { theme?: ThemeAdapter; validate?: ClassValidatorLoader; classes?: { [slot: string]: string }; }
 export interface MutenOptions { store?: boolean; theme?: { [scale: string]: ThemeScale }; styling?: StylingPlugin; }
 
 /** The app graph the build emits to app.map.json: the root the AI reads for context. */

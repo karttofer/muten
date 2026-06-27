@@ -57,5 +57,28 @@ form.handlers.submit({ preventDefault() {} });
 await Promise.resolve();   // the result render batches into a microtask
 ok('valid submit runs the action', done());
 
+// --- field types: password (masked), textarea (multi-line), date (native picker) ---
+const doc2 = toDoc(parse(`screen profile
+entity Prof { handle text required  secret password required min:8  about textarea  born date }
+state { d = {} : Prof  saved = false : bool }
+action save mutates saved <- p { saved.set(true) }
+Page { Form bind(d) submit(save) "Save" }`));
+ok('password/textarea/date form validates clean', validate(doc2).ok);
+const code2 = compile(doc2, {}, '', {}, {}, { format: 'module' });
+ok('password → input type="password"', /\.type = .password./.test(code2));
+ok('textarea → <textarea> element', code2.includes("createElement('textarea')"));
+ok('date → input type="date"', /\.type = .date./.test(code2));
+ok('password length still validates (min:8)', code2.includes('Min 8 characters'));
+
+// --- an unknown field type is FLAGGED, not silently rendered as text ---
+const bad = validate(toDoc(parse(`screen s
+entity X { age numbr  link url }
+state { d = {} : X }
+action go mutates d <- v { d.reset() }
+Page { Form bind(d) submit(go) "x" }`)));
+const utf = bad.diagnostics.filter((x) => x.code === 'unknown-field-type');
+ok('unknown field type "numbr" flagged with did-you-mean number', utf.some((x) => x.message.includes('"numbr"') && x.suggestion === 'number'));
+ok('unknown field type "url" flagged', utf.some((x) => x.message.includes('"url"')));
+
 console.log(f ? `\n${f} FAILURE(S)` : '\nALL OK');
 process.exit(f ? 1 : 0);

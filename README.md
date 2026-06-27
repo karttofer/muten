@@ -100,7 +100,7 @@ that needs the full React ecosystem, and it doesn't pretend to be.
 | **UI** | declarative primitives (layout, text, forms, tables, links) · `when`/`each` control flow · `class("…")` is the single styling path - layout AND look (reactive: `class(active when isOpen)`) · `on(event: action)` on any element · **`on(enter: action)`** synthetic event on inputs (fires only on Enter key - no Custom needed for Enter-to-submit): `SearchField bind(draft) on(enter: send)` |
 | **State** | local `state` · app-global `store` · derived `get` · `action`s with `if/else` · fine-grained signals. A page action can **call a store action** (`cart.add(d)  draft.reset()`): store + local work in one handler |
 | **Lists** | bounded ops, no raw `map`/`reduce`: inline objects (`push({…})`) · in-place `patch` · filtered `each…where` · aggregates `sum`/`count`/`avg`/`min`/`max` · `sort`/`sortDesc` (by a literal field **or** a `text` state = user-chosen column) · `take(n)` pagination/top-N · `toggle(x)` add⇄remove (favorites/subscriptions) |
-| **Forms** | a `Form` auto-built from an entity, one input per field: `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select), with built-in validation |
+| **Forms** | a `Form` auto-built from an entity, one input per field: `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select) · `date` · `password` · `textarea`, with built-in validation (an unknown type is flagged, not silently text) |
 | **Data** | `query` states over `sources` (full HTTP: method, headers, body, nested `at`) · one `api` block (named multi-backend clients) · optimistic CRUD (`create`/`update`/`delete` + `.pending`/`.error`) · `refetch(q: …, page: …)` · **`query x live`** (WebSocket real-time: the server pushes, only changed rows re-render) · a `post`/`put`/`delete` escape for non-REST |
 | **Routing** | real-path URLs · params (`/product/:id` -> `param id`) · route guards · `/404` catch-all · route paths are **quoted strings**: `routes { "/" -> home  "/404" -> notfound }` · `Link "label" -> "/path"` · guard redirects `else "/login"` (bare paths no longer parse) |
 | **SEO / SSR** | `muten build` pre-renders every route to real HTML (static pages ship zero JS; data pages fetched at build) · per-page `meta { title … description … }` with `og:*` auto-derived |
@@ -255,7 +255,7 @@ production system on it yet (small ecosystem, one maintainer, not yet battle-tes
 server + HMR, the VS Code extension (live-lint + autocomplete).
 The bounded list toolkit - inline objects, `patch`, `each...where`, aggregates (`sum`/`count`/`avg`/`min`/`max`),
 `sort`/`sortDesc`, and page->store action composition, so a real CRUD/dashboard app is pure muten, no JS escape.
-`Form` fields cover `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select), with validation.
+`Form` fields cover `text` · `number` (coerced) · `email` · `bool` (checkbox) · `enum` (select) · `date` · `password` · `textarea`, with validation.
 Reactivity is keyed and batched: `each`/`DataTable` reconcile rows by `id` with minimal DOM moves, and `query x live`
 streams real-time updates over a WebSocket (only changed rows re-render).
 
@@ -287,7 +287,7 @@ These are honest gaps found during stress-testing. They are known and tracked; n
 **Form**
 - Auto-generates one input per entity field; no conditional fields.
 - Enum fields cannot be marked `required`.
-- Field types are limited to `text`, `number`, `email`, `bool`, `enum`. No `password`, `date`, or `textarea` yet - drop to a `Custom` component for those.
+- Field types: `text`, `number`, `email`, `bool`, `enum`, `date`, `password`, `textarea`. Anything else (`url`/`tel`/file) is flagged `unknown-field-type` - drop that field to a `Custom`.
 - `Form` renders all entity fields; there is no way to exclude a subset without a `Custom`.
 
 **Select / dropdown outside a Form**

@@ -13,7 +13,8 @@ const KNOWN_TYPES = new Set<string>([...PRIMITIVE_NAMES, Nt.Shell]); // manifest
 const REF_PROPS: Array<'bind' | 'data'> = ['bind', 'data']; // props whose value is @state
 const KNOWN_OPS = new Set<string>([...ACTION_OPS, StOp.Request]); // Request is parsed + compiled but is not a method op
 const SOURCE_OPS = new Set<string>([StOp.Create, StOp.Update, StOp.Delete, StOp.Refetch]); // hit the backend, so the list MUST be query/source-backed
-const SCALARS = ['text', 'number', 'bool', 'uuid', 'email', 'string', 'date'];
+const SCALARS = ['text', 'number', 'bool', 'uuid', 'email', 'string', 'date', 'password', 'textarea'];
+const FIELD_TYPES = ['text', 'string', 'email', 'number', 'bool', 'date', 'password', 'textarea', 'uuid']; // valid entity-field types a Form renders; an unknown one degrades to a text input, so the oracle flags it
 
 // collect the variable names referenced by an expression AST
 function collectRefs(e: Expr, acc: string[] = []): string[] {
@@ -142,12 +143,23 @@ export function validate(doc: Doc, ctx: ValidateCtx = {}): ValidateResult {
     }
   }
 
+  // entity field TYPES: an unknown type (a typo like `numbr`, an unsupported input like `url`/`tel`/`file`, or a
+  // nested entity) silently renders as a plain TEXT input — the author's intent is lost with no error. Flag it so
+  // the oracle catches the slip. (`text`→stored as `string`; `id uuid` is implicit; enums are `enum:a|b`.)
+  const FIELD_DISPLAY = ['text', 'email', 'number', 'bool', 'date', 'password', 'textarea'];
+  for (const [ent, fields] of Object.entries(doc.entities || {})) {
+    for (const [field, ftype] of Object.entries(fields as Record<string, string>)) {
+      if (ftype.startsWith('enum:') || FIELD_TYPES.includes(ftype)) continue;
+      D.push(diag('unknown-field-type', `entity "${ent}" field "${field}": "${ftype}" isn't a field type — it silently renders as a plain text input. Use one of ${FIELD_DISPLAY.join(' / ')}, an \`a | b\` enum, or a Custom for anything else.`, { from: ftype, suggestion: closest(ftype, FIELD_DISPLAY) }));
+    }
+  }
+
   // constraints apply to specific field kinds: a `pattern` on a number, or `min` on a bool, is a guard that
   // silently does nothing — the author thinks they added validation. Reject the mismatch with the reason.
   for (const [ent, fields] of Object.entries(doc.constraints || {})) {
     const edef = (doc.entities?.[ent] || {}) as Record<string, string>;
     for (const [field, c] of Object.entries(fields)) {
-      const ft = edef[field] || '', stringy = ft === 'string' || ft === 'email', kind = ft.startsWith('enum:') ? 'enum' : ft === 'string' ? 'text' : ft;
+      const ft = edef[field] || '', stringy = ft === 'string' || ft === 'email' || ft === 'password' || ft === 'textarea', kind = ft.startsWith('enum:') ? 'enum' : ft === 'string' ? 'text' : ft;
       if (c.pattern != null && !stringy) D.push(diag('constraint-kind', `\`pattern\` on "${ent}.${field}" (a ${kind}) does nothing — \`pattern\` validates text/email fields only.`, { from: field }));
       if ((c.min != null || c.max != null) && ft !== 'number' && !stringy) D.push(diag('constraint-kind', `\`min\`/\`max\` on "${ent}.${field}" (a ${kind}) does nothing — they bound a number's value or text's length only.`, { from: field }));
       if (c.required && ft.startsWith('enum:')) D.push(diag('constraint-kind', `\`required\` on "${ent}.${field}" is redundant — an enum always has a value.`, { from: field }));

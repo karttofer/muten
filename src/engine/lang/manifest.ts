@@ -125,12 +125,12 @@ export const MODIFIER_DOCS = {
   submit: 'Action to run on form submit, e.g. `submit createUser`.',
   where: 'Filter clauses: `where(role == admin, name contains @q)`.',
   columns: 'Columns to show: `columns(name, email, role)`.',
-  class: 'The ONE way to style: raw CSS class(es) — Tailwind utilities (`class("flex flex-row gap-4")`) or your own CSS (`class("card")`, backed by styles.css using theme.muten CSS vars). Muten stays agnostic about appearance.',
+  class: 'The ONE way to style: raw CSS class(es) — utility classes (`class("flex flex-row gap-4")`) or your own CSS (`class("card")`, backed by styles.css using theme.muten CSS vars). Muten stays agnostic about appearance: any class string passes straight through.',
   alt: 'Required accessible/SEO text for an Image: `alt "{p.title}"`. Use "" for decorative images.',
   inputs: 'Custom component inputs: `inputs(data: @sales)`.',
   on: 'Custom component events wired to actions: `on(select: pick)`.',
   aria: 'Accessibility attributes on ANY node — the bounded way to write `aria-*`/`role` (muten is HTML + logic): `aria(label: "Close", role: "dialog", expanded: menuOpen)`. Each key → `aria-<key>`; `role` → `role`. A literal value is a static attribute; a value that reads state is REACTIVE (e.g. `aria(expanded: open)` keeps aria-expanded in sync). Use this for an accessible interactive widget instead of escaping to Custom.',
-  style: 'The bounded way to bind a DYNAMIC CSS value to state — for progress bars, data-driven sizes, transforms: `style(w: "{pct}%")`. Each key becomes a CSS custom property `--key` (muten prepends `--`, so it can ONLY set variables, never arbitrary properties — no competing with class()/Tailwind). The value is an interpolated string; it is REACTIVE when it reads state. Your CSS consumes it: `.bar { width: var(--w); }`. Use class() for STATIC styling; use style() only for a value that changes at runtime.',
+  style: 'The bounded way to bind a DYNAMIC CSS value to state — for progress bars, data-driven sizes, transforms: `style(w: "{pct}%")`. Each key becomes a CSS custom property `--key` (muten prepends `--`, so it can ONLY set variables, never arbitrary properties — no competing with class()). The value is an interpolated string; it is REACTIVE when it reads state. Your CSS consumes it: `.bar { width: var(--w); }`. Use class() for STATIC styling; use style() only for a value that changes at runtime.',
 };
 
 // Built-in formatting functions: callable like a `use`'d function but ALWAYS available (no import). The bounded

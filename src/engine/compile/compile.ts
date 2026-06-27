@@ -37,12 +37,18 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
   // into their own mount functions before splicing them back at runtime.
   const capture = (emit: () => void): string[] => { const saved = lines; lines = []; emit(); const out = lines; lines = saved; return out; };
 
+  // A styling plugin (e.g. DaisyUI) may REMAP a primitive's internal class names — the Form's auto-generated
+  // input/label/submit/… that class() can't reach — to a library's own classes. The engine ships ONLY the
+  // `mu-*` defaults and stays agnostic; the map is pure data from `muten({ styling: { classes } })`.
+  const classMap = opts.classes || {};
+  const slot = (name: string, fallback: string): string => classMap[name] ?? fallback;
+
   // class() = raw CSS classes passed straight through (the one styling path).
   const classFor = (base: string, props: NodeProps): string => {
     // conditional class (`name when cond`) is omitted here and toggled reactively by genDynamics.
-    // Every primitive's base class is `mu-`-prefixed so muten NEVER collides with a CSS framework or
-    // your own classes (a framework may ship its own .stack/.card/…); your look goes through class().
-    return ['mu-' + base, ...(props.class || []).filter((c): c is string => typeof c === 'string')].join(' ');
+    // A primitive's base class is `mu-`-prefixed by default (so muten never collides with a framework's own
+    // .stack/.card/…); a styling plugin may remap it via `classes`. Your look goes through class().
+    return [slot(base, 'mu-' + base), ...(props.class || []).filter((c): c is string => typeof c === 'string')].join(' ');
   };
 
   // Shared compile context + the behaviour compiler that reads it (see logic.ts). `usedStores`
@@ -234,7 +240,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
 
         lines.push(`const el_${id} = document.createElement('form');`);
         lines.push(`el_${id}.className = ${JSON.stringify(classFor('form', p))};`);
-        lines.push(`{ const t = document.createElement('div'); t.className = 'mu-form-title'; t.textContent = ${JSON.stringify('New ' + entityName)}; el_${id}.appendChild(t); }`);
+        lines.push(`{ const t = document.createElement('div'); t.className = ${JSON.stringify(slot('form-title', 'mu-form-title'))}; t.textContent = ${JSON.stringify('New ' + entityName)}; el_${id}.appendChild(t); }`);
 
         const fieldVars: Array<EditableField & { var: string; c?: FieldConstraint }> = [];
         for (const f of fields) {
@@ -244,22 +250,26 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
           fieldVars.push({ ...f, var: fv, c: fc[f.name] });
           // a11y BY DEFAULT (compiler-emitted, the author writes nothing): every field is a group =
           // <label for=id> + the control + its error, with id/for paired and the error linked back.
-          lines.push(`const ${grp} = document.createElement('div'); ${grp}.className = 'mu-field-group';`);
-          lines.push(`{ const lb = document.createElement('label'); lb.className = 'mu-label'; lb.htmlFor = ${JSON.stringify(fv)}; lb.textContent = ${JSON.stringify(labelText)}; ${grp}.appendChild(lb); }`);
+          lines.push(`const ${grp} = document.createElement('div'); ${grp}.className = ${JSON.stringify(slot('field-group', 'mu-field-group'))};`);
+          lines.push(`{ const lb = document.createElement('label'); lb.className = ${JSON.stringify(slot('label', 'mu-label'))}; lb.htmlFor = ${JSON.stringify(fv)}; lb.textContent = ${JSON.stringify(labelText)}; ${grp}.appendChild(lb); }`);
           if (f.kind === Fk.Enum) {
             lines.push(`const ${fv} = document.createElement('select');`);
-            lines.push(`${fv}.className = 'mu-field';`);
+            lines.push(`${fv}.className = ${JSON.stringify(slot('field-select', 'mu-field'))};`);
             for (const opt of f.options) {
               lines.push(`{ const o = document.createElement('option'); o.value = ${JSON.stringify(opt)}; o.textContent = ${JSON.stringify(opt)}; ${fv}.appendChild(o); }`);
             }
           } else if (f.kind === Fk.Bool) {
             lines.push(`const ${fv} = document.createElement('input');`);
             lines.push(`${fv}.type = 'checkbox';`);
-            lines.push(`${fv}.className = 'mu-field-check';`);
+            lines.push(`${fv}.className = ${JSON.stringify(slot('field-check', 'mu-field-check'))};`);
+          } else if (f.kind === Fk.Textarea) {
+            lines.push(`const ${fv} = document.createElement('textarea');`);              // multi-line; .value + 'input' event work the same as a text <input>
+            lines.push(`${fv}.className = ${JSON.stringify(slot('field-area', 'mu-field mu-field-area'))}; ${fv}.rows = 4;`);
+            lines.push(`${fv}.placeholder = ${JSON.stringify(f.name)};`);
           } else {
             lines.push(`const ${fv} = document.createElement('input');`);
-            lines.push(`${fv}.type = ${JSON.stringify(f.kind === Fk.Email ? 'email' : f.kind === Fk.Number ? 'number' : f.kind === Fk.Date ? 'date' : 'text')};`);
-            lines.push(`${fv}.className = 'mu-field';`);
+            lines.push(`${fv}.type = ${JSON.stringify(f.kind === Fk.Email ? 'email' : f.kind === Fk.Number ? 'number' : f.kind === Fk.Date ? 'date' : f.kind === Fk.Password ? 'password' : 'text')};`);
+            lines.push(`${fv}.className = ${JSON.stringify(slot('field', 'mu-field'))};`);
             lines.push(`${fv}.placeholder = ${JSON.stringify(f.name)};`);
           }
           lines.push(`${fv}.id = ${JSON.stringify(fv)};`);                                         // matches the label's htmlFor
@@ -274,11 +284,11 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
           lines.push(`${grp}.appendChild(${fv});`);
           // error span: linked to its input via aria-describedby + announced live (a11y by default). Email
           // fields always get one (they now validate format even without an explicit constraint).
-          if (fc[f.name] || f.kind === Fk.Email) lines.push(`const err_${fv} = document.createElement('small'); err_${fv}.className = 'mu-field-error'; err_${fv}.id = ${JSON.stringify('err_' + fv)}; err_${fv}.setAttribute('aria-live', 'polite'); ${fv}.setAttribute('aria-describedby', ${JSON.stringify('err_' + fv)}); ${grp}.appendChild(err_${fv});`);
+          if (fc[f.name] || f.kind === Fk.Email) lines.push(`const err_${fv} = document.createElement('small'); err_${fv}.className = ${JSON.stringify(slot('field-error', 'mu-field-error'))}; err_${fv}.id = ${JSON.stringify('err_' + fv)}; err_${fv}.setAttribute('aria-live', 'polite'); ${fv}.setAttribute('aria-describedby', ${JSON.stringify('err_' + fv)}); ${grp}.appendChild(err_${fv});`);
           lines.push(`el_${id}.appendChild(${grp});`);
         }
 
-        lines.push(`{ const sb = document.createElement('button'); sb.type = 'submit'; sb.className = 'mu-submit'; sb.textContent = ${JSON.stringify(typeof p.submitLabel === 'string' ? p.submitLabel : 'Submit')}; el_${id}.appendChild(sb); }`);
+        lines.push(`{ const sb = document.createElement('button'); sb.type = 'submit'; sb.className = ${JSON.stringify(slot('submit', 'mu-submit'))}; sb.textContent = ${JSON.stringify(typeof p.submitLabel === 'string' ? p.submitLabel : 'Submit')}; el_${id}.appendChild(sb); }`);
         // submit: validate against schema constraints; only call the action when every field passes.
         const vChecks: string[] = [];
         for (const fv of fieldVars) {

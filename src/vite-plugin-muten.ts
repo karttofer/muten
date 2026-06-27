@@ -150,7 +150,7 @@ if (root) {
         const doc = toDoc({ ...(appIr || {}), screen: 'shell', entities: {}, state: {}, actions: {}, tree }); // spread appIr so shell `imports` survive; chrome stays state/action-free
         // shell + pages emit only their token CSS; reset/base lives in the project stylesheet
         // loaded once via main, so there's no duplicate .stack fighting the cascade.
-        return compileModule(doc, {}, '', {}, {}, { stores: storesMeta, storeEntities: storeListEntities(slices), iconResolver: makeIconResolver(appRoot) });
+        return compileModule(doc, {}, '', {}, {}, { stores: storesMeta, storeEntities: storeListEntities(slices), iconResolver: makeIconResolver(appRoot), classes: options.styling?.classes });
       }
 
     },
@@ -201,7 +201,7 @@ if (root) {
       }
 
       // sources live in app.muten (next to `api`), so a page's `query x` resolves against the APP's sources; a page-local `sources` block still overrides.
-      return { code: compileModule(loaded.doc, loaded.data, loaded.styles.css, components, { ...(appIr?.sources || {}), ...loaded.sources }, { stores: storesMeta, storeEntities, api: appIr?.api || {}, iconResolver: makeIconResolver(appRoot) }), map: null };
+      return { code: compileModule(loaded.doc, loaded.data, loaded.styles.css, components, { ...(appIr?.sources || {}), ...loaded.sources }, { stores: storesMeta, storeEntities, api: appIr?.api || {}, iconResolver: makeIconResolver(appRoot), classes: options.styling?.classes }), map: null };
     },
 
     handleHotUpdate(ctx: HmrContext) {
