@@ -1,4 +1,4 @@
-# project — filesystem & whole-app awareness
+# project - filesystem & whole-app awareness
 
 The only domain that touches the disk. Everything else is pure (text → IR → Doc → string); here is
 where a single page becomes a real, project-aware build, and where the editor's smart linting lives.

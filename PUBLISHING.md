@@ -5,7 +5,7 @@ public npm registry.
 
 ## One-time setup
 
-Create a GitHub Personal Access Token (classic) with `write:packages` and `read:packages` — plus
+Create a GitHub Personal Access Token (classic) with `write:packages` and `read:packages` - plus
 `repo` while the repository is private. Add it to your **global** `~/.npmrc` (never commit a token):
 
 ```
@@ -23,7 +23,7 @@ npm publish
 
 `prepare` builds `dist/` first, and `files` ships `dist` + `spec` + `README` + `LICENSE`. After it
 succeeds the package shows up under **Packages** on the repo page. Bump `version` in `package.json`
-before each release — a registry refuses to overwrite an existing version.
+before each release - a registry refuses to overwrite an existing version.
 
 ## Installing it (consumers)
 

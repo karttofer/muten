@@ -2,7 +2,7 @@
 
 > The authoritative source of the **syntax**. The **vocabulary** (primitives, their props, the style
 > tokens, the keywords) lives in the manifest ([`src/engine/lang/manifest.ts`](../src/engine/lang/manifest.ts))
-> and the enums ([`src/engine/shared/vocab.ts`](../src/engine/shared/vocab.ts)) — the other half of the
+> and the enums ([`src/engine/shared/vocab.ts`](../src/engine/shared/vocab.ts)) - the other half of the
 > rules. From these derive the lexer/parser (`src/engine/lang/`), the validator (`src/engine/ir/`), and
 > the editor's highlight + autocomplete. **Changing the language = changing these rules + the vocabulary.**
 
@@ -31,7 +31,7 @@ declaration = screen | entity | state | store | get | effect | const | theme | p
 
 - A **page** (`src/pages/<route>/<route>.muten`): `screen` + state/entity/action/const/… + one **root node** (the tree).
 - The **app root** (`src/app.muten`): `routes` (+ an optional persistent `shell`).
-- A **store slice** (`*.store`): `store` / `get` / `action` / `effect` — app-global state, no tree.
+- A **store slice** (`*.store`): `store` / `get` / `action` / `effect` - app-global state, no tree.
 - A **part** (`src/**/parts/*.muten`): `part` (+ its own entity/state/mock, *hoisted* when used).
 - The **theme** (`theme.muten`): a single `theme` block (the token scale).
 
@@ -51,7 +51,7 @@ binding  = ident "=" ( "query" ident | value ) ":" type ;   # query → async { 
 get      = "get" ident "=" expr ;                     # .store derived/memoized value
 effect   = "effect" actionBody ;                      # .store reactive side-effect
 const    = "const" ident "=" scalar ;                 # compile-time immutable (scalars only)
-param    = "param" ident ;                            # a route param the page reads (for /x/:id) — read-only string
+param    = "param" ident ;                            # a route param the page reads (for /x/:id) - read-only string
 
 action     = "action" ident "mutates" ident ( "," ident )* "<-" ident actionBody ;
 actionBody = "{" statement* "}" ;

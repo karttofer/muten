@@ -137,7 +137,7 @@ coupling in chart.js or zod never costs you the oracle on the muten side.
 **Deploy - the honest caveat.** Two production paths, both muten's own runner. `muten build` (the CLI SSG)
 **inlines the theme + project `styles.css`** and **pre-renders (SSR) your stores/`query` data**, so each route
 ships fully styled with real content as zero-JS HTML. The two things a static export can't do: bundle `use`
-functions and persist store state across full-page navigations — for those, `muten bundle` produces a CSR
+functions and persist store state across full-page navigations - for those, `muten bundle` produces a CSR
 build (per-route chunks + source maps + a ship-size report). `npm run dev` runs every tier regardless.
 
 | Your app uses... | Deploy with |
@@ -173,7 +173,7 @@ routes {
 ## CLI
 
 ```sh
-muten dev    [dir]           # dev server — esbuild, in-memory, SURGICAL HMR + the oracle on every save
+muten dev    [dir]           # dev server - esbuild, in-memory, SURGICAL HMR + the oracle on every save
 muten bundle [dir]           # production build → ./dist (per-route chunks + source maps + ship-size report)
 muten build  [dir]           # SSG: pre-render every route to zero-JS HTML (+ app.map.json)
 muten check  [dir] [--json]  # parse + validate every page, no compile - the deterministic ORACLE
@@ -251,12 +251,12 @@ file-level conventions (≤500 lines, honest types, data-table dispatch, no magi
 ## Styling & escape hatch
 
 muten imposes no theme. There is ONE way to style: `class("…")` (your CSS / Tailwind / anything) carries both
-layout and look — and it composes reactively: toggle a token (`class(active when x)`) or build one from a value
+layout and look - and it composes reactively: toggle a token (`class(active when x)`) or build one from a value
 (`class("status-{m.status}")` → `status-online`/`status-idle`, the reference oracle-checked). `theme.muten` holds
 the design values and muten emits them as `:root` CSS custom properties (`--space-md`, `--color-primary`, ...)
 that your CSS consumes. For a CSS value that **changes at runtime** (a progress width, a dynamic transform),
 `style(w: "{pct}%")` binds it to a CSS variable `--w` (the only thing `style()` can set). Common formatting is
-**built in** — `ago` / `date` / `time` / `initial` / `money` / `upper` / `truncate` (no `use` for dates or
+**built in** - `ago` / `date` / `time` / `initial` / `money` / `upper` / `truncate` (no `use` for dates or
 initials). For behavior the primitives can't express, drop to a `Custom` component (`src/components/<Name>.js`).
 
 ## Status & roadmap (honest)
