@@ -344,7 +344,9 @@ export async function devEsbuild(root: string, port = 5173): Promise<void> {
   const ctx = await esbuild.context({
     entryPoints: { boot: join(root, 'src', 'app.muten') },
     bundle: true, format: 'esm', splitting: true, sourcemap: true, write: false,
-    outdir, entryNames: 'assets/[name]', chunkNames: 'assets/[name]', assetNames: 'assets/[name]',
+    // entry stays unhashed (index.html references /assets/boot.js); SHARED CHUNKS must be hashed, or ≥2 of them
+    // (e.g. the runtime + a shared lib like fruta) both land on assets/chunk.js and esbuild aborts the dev build.
+    outdir, entryNames: 'assets/[name]', chunkNames: 'assets/[name]-[hash]', assetNames: 'assets/[name]',
     publicPath: '/', logLevel: 'silent', plugins: [mutenEsbuild(root, model, true)], // dev: HMR registry on
   });
 
