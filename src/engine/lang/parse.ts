@@ -462,6 +462,7 @@ export class Parser extends Grammar {
           if (type === Nt.Title && isLevel(word)) { this.next(); props.level = word; break; } // heading level (h1..h6)
           if (type === Nt.Video && VIDEO_FLAGS.has(word)) { this.next(); (props.flags = props.flags || []).push(word); break; } // <video> boolean attr
           if (type === Nt.List && word === Kw.Ordered) { this.next(); props.ordered = true; break; }                          // List ordered -> <ol>
+          if (type === Nt.Details && word === Kw.Open) { this.next(); props.open = true; break; }                              // Details open -> <details open>
           const applyModifier = this.modifiers.get(word);                          // table keys are the valid modifiers
           if (!applyModifier) { reading = false; break; }                          // unknown ident starts a sibling node
           this.next();

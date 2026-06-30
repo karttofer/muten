@@ -5,12 +5,46 @@
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
+import { createRequire } from 'node:module';
 import { parse } from '#engine/lang/parse.js';
 import { resolveStyles } from '#engine/project/styles.js';
 import { composeDoc } from '#engine/ir/compose.js';
+import { readMutenConfig } from '#engine/project/config.js';
 import type { PartDef, Value, LoadResult, IR, Entity } from '#engine/shared/types.js';
 
 type Parts = { [name: string]: PartDef };
+
+// A plugin registry's index (registry.json). `file` is the part to import; `component` (if present) marks a
+// Custom-backed entry whose host .js must live in src/components/ - those are `muten add`-only, never imported.
+interface PluginRegistry { components?: { file: string; component?: string }[]; }
+
+// Parts IMPORTED from installed plugins declared in `muten.config`:  plugins { shadcn {} }  ->  @muten/shadcn.
+// This is the "use without owning" path (the registry seam); `muten add` copies a part into src/parts to eject + own it.
+// Local src/parts always win (so an ejected copy overrides the imported one) - see loadAllParts merge order.
+export async function loadPluginParts(appRoot: string): Promise<Parts> {
+  const out: Parts = {};
+  const plugins = readMutenConfig(appRoot).plugins;
+  if (typeof plugins !== 'object' || plugins === null || Array.isArray(plugins)) return out;
+  let req;
+  try { req = createRequire(join(appRoot, 'package.json')); } catch { return out; }
+  for (const name of Object.keys(plugins)) {
+    let regPath;
+    try { regPath = req.resolve(`@muten/${name}/registry.json`); } catch { continue; } // not installed / not a registry plugin
+    let reg: PluginRegistry;
+    try { reg = JSON.parse(readFileSync(regPath, 'utf8')); } catch { continue; }
+    const dir = dirname(regPath);
+    for (const c of reg.components || []) {
+      if (c.component) continue; // Custom-backed: add-only (its host .js isn't in src/components/ unless copied)
+      const filePath = join(dir, c.file);
+      if (!existsSync(filePath)) continue;
+      const ir = parse(readFileSync(filePath, 'utf8'));
+      const { css } = await resolveStyles(filePath);
+      for (const [partName, def] of Object.entries(ir.parts || {}))
+        out[partName] = { ...def, state: ir.state || {}, entities: ir.entities || {}, mock: ir.mock || {}, css };
+    }
+  }
+  return out;
+}
 
 // Element entity of each store's list-typed STATE member, keyed "domain.member" — so a PAGE doing a
 // cross-store aggregate (`orders.items.count where status == …`) can resolve the element's fields the
@@ -59,7 +93,7 @@ export async function loadParts(dir: string): Promise<Parts> {
 // Gather all parts in the app (any `parts/` folder under src/). Parts are app-global:
 // defined anywhere, usable and autocompleted anywhere.
 export async function loadAllParts(appRoot: string): Promise<Parts> {
-  const all: Parts = {};
+  const all: Parts = await loadPluginParts(appRoot); // imported plugin parts first - local src/parts below override them
   const dirs: string[] = [];
   const walk = (d: string): void => {
     let entries;

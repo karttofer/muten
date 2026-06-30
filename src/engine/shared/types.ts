@@ -95,7 +95,7 @@ export interface ParamRef { $param: string; }
 export type StringPropValue = string | Interp | ParamRef;
 
 /** The prop names that a primitive's positional string can land in (manifest `.string`). */
-export type StringPropName = 'value' | 'label' | 'src' | 'alt' | 'name' | 'placeholder' | 'submitLabel';
+export type StringPropName = 'value' | 'label' | 'src' | 'alt' | 'name' | 'placeholder' | 'submitLabel' | 'summary';
 
 
 // ── 5. Action / effect statements ────────────────────────────────────────────
@@ -237,6 +237,8 @@ export interface NodeProps {
   name?: StringPropValue;   // Icon "set:name" (a static Iconify ref)
   flags?: string[];         // Video boolean attrs: controls / autoplay / loop / muted / playsinline
   ordered?: boolean;        // List `ordered` -> <ol> instead of <ul>
+  open?: boolean;           // Details `open` -> <details open> (expanded by default)
+  summary?: StringPropValue; // Details summary text -> <summary>
   placeholder?: StringPropValue;
   submitLabel?: StringPropValue;
   // structure & wiring

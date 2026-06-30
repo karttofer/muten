@@ -52,6 +52,11 @@ export const PRIMITIVES: { [name: string]: Primitive } = {
     doc: 'A semantic list (<ul>; add the `ordered` keyword for <ol>). Its direct children render as <li> - usually one `each`. Use it for ANY real list (menus, feeds, results, steps) so screen readers announce "list, N items"; reach for a plain Stack only when the group is not a list. `List class("flex flex-col gap-2") { each todos as t { Span "{t.title}" } }` · ordered: `List ordered { each steps as s { Text "{s}" } }`. Style the <li> via the child you put inside; bullets are off when you use flex/grid (add list-disc to keep them).',
     snippet: 'List class("flex flex-col gap-2") {\n\teach ${1:items} as ${2:item} {\n\t\t$0\n\t}\n}',
   },
+  Details: {
+    string: 'summary', props: { summary: 'text' }, children: true, interp: true,
+    doc: 'Native disclosure / accordion (<details> + <summary>). The positional string is the summary (the clickable header; it interpolates); the children are the collapsible content. Zero state, zero JS - the browser handles the toggle, keyboard, and a11y. `Details "Shipping & returns" { Text "Free returns within 30 days." }`. Add `open` to start expanded: `Details "FAQ" open { … }`. Use it for FAQs, "show more", optional detail; reach for state + when only when you need a controlled or animated panel.',
+    snippet: 'Details "${1:Summary}" {\n\t$0\n}',
+  },
   Text: {
     string: 'value', props: { value: 'text' }, children: false, interp: true,
     doc: 'Paragraph text (<p>). Interpolates state reactively: `Text "Hi, {user.name}"`.',

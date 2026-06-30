@@ -5,7 +5,7 @@
 import { join, relative } from 'node:path';
 import { readFileSync, existsSync, watch } from 'node:fs';
 import { readRoutes, readApi, apiClientNames } from '#engine/project/routes.js';
-import { load, loadParts, findStores } from '#engine/project/load.js';
+import { load, loadAllParts, findStores } from '#engine/project/load.js';
 import { storeContext } from '#engine/project/context.js';
 import { validateStoresAndGuards } from '#engine/project/check-app.js';
 import { parse } from '#engine/lang/parse.js';
@@ -18,7 +18,7 @@ import type { Diagnostic } from '#engine/shared/types.js';
 export async function lintApp(appRoot: string, json = false): Promise<number> {
   const rel = (p: string) => relative(appRoot, p);
   const iconExists = getIconChecker(appRoot);                    // `Icon "set:name"` existence, so a typo'd icon fails `check` instead of only the build
-  const sharedParts = await loadParts(join(appRoot, 'src', 'parts'));
+  const sharedParts = await loadAllParts(appRoot);               // all src/**/parts + parts imported from plugins (muten.config)
   const storeIRs = findStores(join(appRoot, 'src'));             // store domains + members needed to validate cross-page refs like cart.add / cart.count
   const { stores, storeMembers, storeSelfMut, storeEntities } = storeContext(storeIRs); // ONE assembly, shared with build + plugin (no drift)
   const apiClients = apiClientNames(readApi(appRoot));           // the app's named api clients, so a `post "client:/x"` prefix is checked

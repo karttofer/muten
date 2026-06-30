@@ -7,6 +7,7 @@ import { writeFileSync } from 'node:fs';
 import { dev, bundle } from '../runner.js';
 import { buildApp } from '../build.js';
 import { lintApp, lintWatch } from '../lint.js';
+import { addComponents } from '../add.js';
 import { mapApp } from '#engine/project/map.js';
 
 const args = process.argv.slice(2);
@@ -27,8 +28,13 @@ try {
     const map = await mapApp(root);
     if (json) console.log(JSON.stringify(map, null, 2));
     else { writeFileSync(join(root, 'app.map.json'), JSON.stringify(map, null, 2)); console.log('✓ app.map.json → the app graph (read this first)'); }
+  }
+  else if (cmd === 'add') { // copy component source from an installed registry (e.g. @muten/shadcn) into src/parts/
+    const names = args.slice(1).filter((a) => !a.startsWith('-'));
+    if (!names.length) { console.error('usage: muten add <component...>   (from an installed registry, e.g. @muten/shadcn)'); process.exit(1); }
+    addComponents(process.cwd(), names);
   } else {
-    console.error('usage: muten <dev|bundle|build|check|map|lint> [dir] [--json]\nto create an app:  npm create muten@latest <dir>');
+    console.error('usage: muten <dev|bundle|build|check|map|lint|add> [dir] [--json]\nto create an app:  npm create muten@latest <dir>');
     process.exit(1);
   }
 } catch (e) {

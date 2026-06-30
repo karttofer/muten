@@ -85,7 +85,7 @@ function subProps(props: NodeProps, args: ArgMap): NodeProps {
   if (props.submit !== undefined) out.submit = refText(props.submit, args);
   if (props.bind !== undefined) out.bind = refText(props.bind, args);
   if (props.to !== undefined) out.to = typeof props.to === 'string' ? props.to : subInterp(props.to, args);
-  if (props.inputs !== undefined) out.inputs = subArgs(props.inputs, args);
+  if (props.inputs !== undefined) out.inputs = subInputs(props.inputs, args);
   if (props.on !== undefined) out.on = subArgs(props.on, args);
   if (props.styleVars !== undefined) out.styleVars = Object.fromEntries(Object.entries(props.styleVars).map(([k, v]) => [k, typeof v === 'string' ? v : subInterp(v, args)])); // `style(w: "{$pct}")` in a part: sub the param
   if (props.aria !== undefined) out.aria = Object.fromEntries(Object.entries(props.aria).map(([k, e]) => [k, subExpr(e, args)]));                                          // `aria(label: $lbl)` in a part: sub the param
@@ -136,6 +136,20 @@ function subArgValue(v: ArgValue, args: ArgMap): ArgValue {
   if (typeof v === 'number') return v;
   if ('$lit' in v) return v;        // quoted literal: nothing to substitute
   return args[v.$param];            // nested $param -> the arg
+}
+
+// Custom `inputs` are read by customValue, which marks a REACTIVE ref with a leading `@` (else it's a literal).
+// A part param resolves to a bare ref string (`vol`), which would be JSON-stringified as the literal "vol" and
+// never update - so when a param's arg is a ref (not a $lit/number), restore the `@` so it stays reactive.
+function subInputs(m: ArgMap, args: ArgMap): ArgMap {
+  const out: ArgMap = {};
+  for (const [k, v] of Object.entries(m)) {
+    const sub = subArgValue(v, args); // resolves a {$param}/"$x" param to its arg (a bare ref string, a number, or a {$lit})
+    // A resolved bare string is a state/param REF; restore the `@` customValue needs so it stays reactive
+    // (without it the ref is JSON-stringified as a literal and never updates). Numbers and {$lit} pass through.
+    out[k] = (typeof sub === 'string' && sub.length > 0 && !sub.startsWith('@')) ? '@' + sub : sub;
+  }
+  return out;
 }
 
 // "$char.image" + {char:"c"} -> "c.image";  "$onSave" -> "addFav".  Non-$ strings pass through.

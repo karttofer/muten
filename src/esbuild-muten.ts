@@ -181,6 +181,11 @@ async function runTailwind(css: string, root: string): Promise<string> {
   return compiler.build(new oxide.Scanner({ sources }).scan());
 }
 
+// Last successful Tailwind output, kept across rebuilds: a transient Tailwind failure (e.g. a file caught
+// mid-write during an incremental dev rebuild) must NOT serve un-utility'd raw CSS - that flashes the whole app
+// unstyled. We serve the last good CSS until the next build succeeds.
+let lastGoodCss = '';
+
 // The project stylesheet, fully resolved as one artifact (outside esbuild's graph): sass (.scss) -> theme.muten's
 // @theme block -> Tailwind (if used). Regenerated on every build so a new class() in a .muten is always scanned.
 async function buildCss(root: string, model: Model): Promise<string> {
@@ -196,8 +201,8 @@ async function buildCss(root: string, model: Model): Promise<string> {
   const block = emitTheme(model.themeRaw, model.themeAdapter);
   if (block) css += '\n\n/* muten: generated from theme.muten */\n' + block;
   if (/@import\s+["']tailwindcss["']|@plugin\s+["']daisyui/.test(css)) {
-    try { css = await runTailwind(css, root); }
-    catch (e) { console.warn(`  ⚠ Tailwind step failed (${e instanceof Error ? e.message : String(e)}); serving raw CSS`); }
+    try { css = await runTailwind(css, root); lastGoodCss = css; }
+    catch (e) { console.warn(`  ⚠ Tailwind step failed (${e instanceof Error ? e.message : String(e)}); serving the last good CSS`); if (lastGoodCss) css = lastGoodCss; }
   }
   return css;
 }
@@ -263,9 +268,10 @@ export async function bundleEsbuild(root: string, outDir = join(root, 'dist')): 
   }
 
   // the boot is the entry whose entryPoint is app.muten; route chunks are separate outputs.
+  // esbuild reports entryPoint relative to cwd (e.g. "src/app.muten", no leading slash), so match either form.
   let jsHref = '';
   for (const [file, meta] of Object.entries(result.metafile.outputs)) {
-    if (meta.entryPoint?.replace(/\\/g, '/').endsWith('/src/app.muten') && file.endsWith('.js')) jsHref = '/' + relative(outDir, file).replace(/\\/g, '/');
+    if (meta.entryPoint && /(?:^|\/)src\/app\.muten$/.test(meta.entryPoint.replace(/\\/g, '/')) && file.endsWith('.js')) jsHref = '/' + relative(outDir, file).replace(/\\/g, '/');
   }
 
   // CSS is built outside esbuild (sass + theme + Tailwind), then minified + content-hashed for cache-busting.
@@ -414,6 +420,7 @@ export async function devEsbuild(root: string, port = 5173): Promise<void> {
 
   createServer(async (req, res) => {
     const url = (req.url || '/').split('?')[0];
+    res.setHeader('Cache-Control', 'no-cache'); // dev: assets change on every edit (boot.css has no hash); never let the browser serve a stale copy
     if (url === '/_reload') { res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' }); clients.add(res); req.on('close', () => clients.delete(res)); return; }
     if (url === '/_muten/graph') { // the live app graph (routes/stores/parts) — an AI reads the structure without parsing files
       res.setHeader('Content-Type', 'application/json');

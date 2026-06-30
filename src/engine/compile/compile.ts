@@ -201,6 +201,16 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
         break;
       }
 
+      case Nt.Details: { // native disclosure: <details> + <summary>, the browser owns the toggle (no JS, no state)
+        declEl(id, 'details', classFor('details', p));
+        if (p.open) lines.push(`el_${id}.open = true;`);
+        appendEl(id, parentVar);
+        genDynamics(id, p);
+        genTextEl(id + 's', 'summary', 'mu-summary', p.summary, `el_${id}`); // <summary> is the first child (the clickable header)
+        genChildren(id, `el_${id}`);
+        break;
+      }
+
       case Nt.SearchField: {
         const sig = logic.bindSig(p.bind);
         lines.push(`const el_${id} = document.createElement('input');`);
@@ -524,7 +534,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
     if ((doc.params || []).length) return false;  // a param page needs mount(app, params), never the static path
     const reactiveType = new Set<string>([Nt.When, Nt.Each, Nt.Custom, Nt.Form, Nt.SearchField, Nt.DataTable, Nt.Slot]);
     const reactiveProp: Array<keyof NodeProps> = ['action', 'bind', 'submit', 'on', 'inputs', 'data'];
-    const interpKeys: Array<keyof NodeProps> = ['value', 'src', 'alt', 'label', 'to'];
+    const interpKeys: Array<keyof NodeProps> = ['value', 'src', 'alt', 'label', 'to', 'summary'];
     for (const id of Object.keys(nodes)) {
       const n = nodes[id]; const p = n.props || {};
       if (reactiveType.has(n.type)) return false;
@@ -553,6 +563,7 @@ export function compile(doc: Doc, data: { [name: string]: Value } = {}, projectC
       case Nt.Link: return `<a${cls('link')} href="${escAttr(strOf(p.to) || '/')}">${(n.children && n.children.length) ? kids() : escHtml(strOf(p.label))}</a>`;
       case Nt.Button: return `<button${cls('button')}>${(n.children && n.children.length) ? kids() : escHtml(strOf(p.label))}</button>`;
       case Nt.List: { const tag = p.ordered ? 'ol' : 'ul'; return `<${tag}${cls('list')}>${(nodes[id].children || []).map((cid) => `<li>${renderStatic(cid)}</li>`).join('')}</${tag}>`; }
+      case Nt.Details: return `<details${cls('details')}${p.open ? ' open' : ''}><summary class="mu-summary">${escHtml(strOf(p.summary))}</summary>${kids()}</details>`;
       default: return '';
     }
   }
