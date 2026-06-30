@@ -179,6 +179,7 @@ muten build  [dir]           # SSG: pre-render every route to zero-JS HTML (+ ap
 muten check  [dir] [--json]  # parse + validate every page, no compile - the deterministic ORACLE
                              #   --json → structured diagnostics (code + loc + "did you mean…?") in ms, no browser
 muten map    [dir] [--json]  # emit app.map.json COLD (no build) - the app graph an AI reads FIRST
+muten add    <component...>  # copy components from an installed registry plugin (e.g. @muten/shadcn) into src/parts/
 ```
 
 `check` and `map` are the AI-first feedback loop: an agent asks the compiler "is this valid, and what
@@ -209,7 +210,19 @@ the legacy Vite plugin for an app that needs a custom Vite/PostCSS plugin:
 ```
 # muten.config
 dev { port 5173 }
+
+# import a component-library plugin's parts as-is (no copy):
+plugins { shadcn {} }
 ```
+
+## Plugins & component libraries
+
+The core ships **no component library** (the styling core is agnostic). Components come from **plugins**: npm
+packages with a `registry.json` of muten parts. Install one (e.g. `npm i @muten/shadcn`), then either **import**
+its parts via `plugins { shadcn {} }` in `muten.config`, or **eject** them with `muten add <component>` (copies
+the source into `src/parts/`, the shadcn "own the source" model). Custom-backed widgets (sliders, calendars,
+charts) are `muten add`-only, since their host `.js` must live in your `src/components/`. The registry seam is
+part of `@muten/core`; the flagship plugin is [`@muten/shadcn`](https://www.npmjs.com/package/@muten/shadcn).
 
 ## Programmatic API
 
