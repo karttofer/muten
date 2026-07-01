@@ -37,8 +37,8 @@ function loadPartsLite(dir: string): Parts {
 }
 
 // Loads the parts a muten.config `plugins {}` imports (@muten/<name>), so the linter knows them like local parts.
-// Mirrors loadPluginParts (load.ts) but sync + style-free (the linter needs only the part shapes). Custom-component
-// entries are skipped - those ship a .js and are `muten add`-only.
+// Mirrors loadPluginParts (load.ts) but sync + style-free (the linter needs only the part shapes). EVERY registry
+// part is loaded - including Custom-backed ones (Chart, …), which are importable now (their .js resolves at compile).
 function loadPluginPartsLite(appRoot: string): Parts {
   const parts: Parts = {};
   const plugins = readMutenConfig(appRoot).plugins;
@@ -52,7 +52,6 @@ function loadPluginPartsLite(appRoot: string): Parts {
     try { registry = JSON.parse(fs.readFileSync(registryPath, 'utf8')); } catch { continue; }
     const base = dirname(registryPath);
     for (const entry of registry.components || []) {
-      if (entry.component) continue;
       let ir;
       try { ir = parse(fs.readFileSync(join(base, entry.file), 'utf8')); } catch { continue; }
       for (const [pname, def] of Object.entries(ir.parts || {})) parts[pname] = { ...def, state: ir.state || {}, entities: ir.entities || {} };

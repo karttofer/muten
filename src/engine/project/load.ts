@@ -14,13 +14,15 @@ import type { PartDef, Value, LoadResult, IR, Entity } from '#engine/shared/type
 
 type Parts = { [name: string]: PartDef };
 
-// A plugin registry's index (registry.json). `file` is the part to import; `component` (if present) marks a
-// Custom-backed entry whose host .js must live in src/components/ - those are `muten add`-only, never imported.
+// A plugin registry's index (registry.json). `file` is the part to import; `component` (if present) names a
+// Custom-backed entry whose host .js sits next to `file` (chart.muten -> chart.js) and is inlined at compile.
 interface PluginRegistry { components?: { file: string; component?: string }[]; }
 
 // Parts IMPORTED from installed plugins declared in `muten.config`:  plugins { shadcn {} }  ->  @muten/shadcn.
 // This is the "use without owning" path (the registry seam); `muten add` copies a part into src/parts to eject + own it.
 // Local src/parts always win (so an ejected copy overrides the imported one) - see loadAllParts merge order.
+// EVERY registry part is imported - including Custom-backed ones (Chart, Calendar, …); their host .js is resolved
+// from the plugin by loadPluginComponents (below), so `plugins {}` gives you the full catalog without ejecting.
 export async function loadPluginParts(appRoot: string): Promise<Parts> {
   const out: Parts = {};
   const plugins = readMutenConfig(appRoot).plugins;
@@ -34,13 +36,36 @@ export async function loadPluginParts(appRoot: string): Promise<Parts> {
     try { reg = JSON.parse(readFileSync(regPath, 'utf8')); } catch { continue; }
     const dir = dirname(regPath);
     for (const c of reg.components || []) {
-      if (c.component) continue; // Custom-backed: add-only (its host .js isn't in src/components/ unless copied)
       const filePath = join(dir, c.file);
       if (!existsSync(filePath)) continue;
       const ir = parse(readFileSync(filePath, 'utf8'));
       const { css } = await resolveStyles(filePath);
       for (const [partName, def] of Object.entries(ir.parts || {}))
         out[partName] = { ...def, state: ir.state || {}, entities: ir.entities || {}, mock: ir.mock || {}, css };
+    }
+  }
+  return out;
+}
+
+// Host .js for the Custom-backed registry entries of installed plugins, keyed by the Custom's component name.
+// So an imported plugin part (`Chart(data: …)` -> `Custom Chart …`) can find its host source in node_modules.
+// A LOCAL src/components/<Name>.js still wins at compile (that's how `muten add` ejects + owns a Custom).
+export function loadPluginComponents(appRoot: string): { [component: string]: string } {
+  const out: { [component: string]: string } = {};
+  const plugins = readMutenConfig(appRoot).plugins;
+  if (typeof plugins !== 'object' || plugins === null || Array.isArray(plugins)) return out;
+  let req;
+  try { req = createRequire(join(appRoot, 'package.json')); } catch { return out; }
+  for (const name of Object.keys(plugins)) {
+    let regPath;
+    try { regPath = req.resolve(`@muten/${name}/registry.json`); } catch { continue; }
+    let reg: PluginRegistry;
+    try { reg = JSON.parse(readFileSync(regPath, 'utf8')); } catch { continue; }
+    const dir = dirname(regPath);
+    for (const c of reg.components || []) {
+      if (!c.component) continue;
+      const js = join(dir, c.file.replace(/\.muten$/, '.js'));
+      if (existsSync(js)) out[c.component] = js;
     }
   }
   return out;

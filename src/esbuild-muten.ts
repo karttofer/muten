@@ -16,7 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, relative, extname, basename } from 'node:path';
 import { parse } from '#engine/lang/parse.js';
 import { toDoc } from '#engine/ir/flatten.js';
-import { load, loadAllParts, findStores } from '#engine/project/load.js';
+import { load, loadAllParts, findStores, loadPluginComponents } from '#engine/project/load.js';
 import { storeContext, type StoreContext } from '#engine/project/context.js';
 import { readMutenConfig, configThemeAdapter, configClasses } from '#engine/project/config.js';
 import { apiClientNames } from '#engine/project/routes.js';
@@ -125,10 +125,12 @@ async function compilePage(root: string, path: string, model: Model, dev = false
   if (!ok) return { errors: diagnostics.map((d) => muError(path, d.message + (d.suggestion ? ` (did you mean \`${d.suggestion}\`?)` : ''), d.loc)) };
   const customNames = [...new Set(Object.values(loaded.doc.nodes).filter((n) => n.type === Nt.Custom).map((n) => n.props?.component))];
   const components: { [name: string]: string } = {};
+  const pluginComponents = loadPluginComponents(root); // Custom host .js shipped by imported plugins (Chart, …)
   for (const name of customNames) {
     if (!name) continue;
     const cpath = join(root, 'src', 'components', name + '.js');
-    if (existsSync(cpath)) components[name] = readFileSync(cpath, 'utf8');
+    if (existsSync(cpath)) components[name] = readFileSync(cpath, 'utf8');          // local/ejected wins
+    else if (pluginComponents[name]) components[name] = readFileSync(pluginComponents[name], 'utf8'); // else the plugin's
   }
   const sources = { ...(model.appIr?.sources || {}), ...loaded.sources };
   return {
